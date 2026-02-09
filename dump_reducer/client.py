@@ -5,9 +5,10 @@ from typing import Any, Dict, List
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 class OpenRouterClient:
-    def __init__(self, api_key: str, model: str) -> None:
+    def __init__(self, api_key: str, model: str, verify: bool = True) -> None:
         self.api_key = api_key
         self.model = model
+        self.verify = verify
 
     def chat(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         headers = {
@@ -23,6 +24,6 @@ class OpenRouterClient:
             "tool_choice": "auto",
             "temperature": 0.2,
         }
-        resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=120)
+        resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=120, verify=self.verify)
         resp.raise_for_status()
         return resp.json()

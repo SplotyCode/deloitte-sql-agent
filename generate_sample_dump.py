@@ -1,8 +1,12 @@
 import sqlite3
 import random
+import os
 
-def generate_sample_dump(filename="sample_dump.sql"):
-    conn = sqlite3.connect(":memory:")
+def generate_sample_dump(filename="sample_dump.sql", db_filename="sample_dump.db"):
+    if os.path.exists(db_filename):
+        os.remove(db_filename)
+
+    conn = sqlite3.connect(db_filename)
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -64,6 +68,7 @@ def generate_sample_dump(filename="sample_dump.sql"):
 
     conn.close()
     print(f"Sample dump generated: {filename}")
+    print(f"SQLite database generated: {db_filename}")
 
 if __name__ == "__main__":
     generate_sample_dump()

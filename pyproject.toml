@@ -4,5 +4,16 @@ version = "0.1.0"
 description = "Reduce the size of production dumps but keeping relevant test cases"
 requires-python = ">=3.14"
 dependencies = [
+    "requests",
+    "psycopg[binary]",
+]
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
 ]
