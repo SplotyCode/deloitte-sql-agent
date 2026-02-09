@@ -105,3 +105,4 @@ def test_sqlite_query_sql_forbidden(temp_db):
     tools = SqliteTools(temp_db)
     with pytest.raises(ValueError, match="Only SELECT"):
         tools.query_sql("DELETE FROM users")
+

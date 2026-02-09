@@ -10,9 +10,6 @@ def qi(ident: str) -> str:
     """Quote identifier for PostgreSQL."""
     return '"' + ident.replace('"', '""') + '"'
 
-def qname(schema: str, name: str) -> str:
-    return f"{qi(schema)}.{qi(name)}"
-
 def ensure_readonly_sql(sql: str) -> None:
     if ";" in sql.strip().rstrip(";"):
         # crude but effective: disallow multi-statement and embedded semicolons

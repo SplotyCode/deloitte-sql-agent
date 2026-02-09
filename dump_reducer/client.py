@@ -1,6 +1,13 @@
 import json
 import requests
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TypedDict, Optional
+
+class Message(TypedDict, total=False):
+    role: str
+    content: Optional[str]
+    name: Optional[str]
+    tool_calls: Optional[List[Dict[str, Any]]]
+    tool_call_id: Optional[str]
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -10,11 +17,10 @@ class OpenRouterClient:
         self.model = model
         self.verify = verify
 
-    def chat(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def chat(self, messages: List[Message], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://localhost",
             "X-Title": "db-subset-agent",
         }
         payload = {

@@ -1,33 +1,10 @@
-import sqlite3
 try:
     import psycopg
 except ImportError:
     psycopg = None
-from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple, Optional
-from dataclasses import dataclass
-from .utils import ensure_readonly_sql, qi
-
-@dataclass
-class TableInfo:
-    schema: str
-    name: str
-    columns: List[Tuple[str, str]]           # (col_name, data_type)
-    pk_cols: List[str]                       # support 1-col PK best
-    fks: List[Dict[str, Any]]                # {constraint, columns, ref_schema, ref_table, ref_columns}
-
-class BaseDbTools(ABC):
-    @abstractmethod
-    def get_schema(self) -> Dict[str, Any]:
-        pass
-
-    @abstractmethod
-    def get_stats(self, table: str) -> Dict[str, Any]:
-        pass
-
-    @abstractmethod
-    def query_sql(self, sql: str, max_rows: int = 50) -> Dict[str, Any]:
-        pass
+from typing import Any, Dict, List, Tuple
+from ..utils import ensure_readonly_sql
+from .base import BaseDbTools
 
 class PgTools(BaseDbTools):
     def __init__(self, db_url: str) -> None:
@@ -37,6 +14,25 @@ class PgTools(BaseDbTools):
         if psycopg is None:
             raise ImportError("psycopg is not installed. Run 'pip install psycopg[binary]' to use PostgreSQL.")
         return psycopg.connect(self.db_url)
+
+    def get_ddl(self, tables: List[str] = None) -> str:
+        """
+        Uses pg_dump to get schema DDL.
+        """
+        import subprocess
+        # db_url can be passed as the connection string argument
+        try:
+            # -s for schema-only, --no-owner to avoid permission issues on restore
+            cmd = ["pg_dump", "-s", "--no-owner", "--no-privileges"]
+            if tables:
+                for t in tables:
+                    cmd.extend(["-t", t])
+            cmd.append(self.db_url)
+            
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return res.stdout
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            return f"-- pg_dump schema failed or not found: {e}"
 
     def get_schema(self) -> Dict[str, Any]:
         """
@@ -199,114 +195,5 @@ class PgTools(BaseDbTools):
             cols = [d.name for d in cur.description]
             rows = cur.fetchmany(max_rows)
         # stringify to avoid binary/decimal weirdness
-        srows = [[None if v is None else str(v) for v in r] for r in rows]
-        return {"columns": cols, "rows": srows, "truncated": len(rows) == max_rows}
-
-class SqliteTools(BaseDbTools):
-    def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
-
-    def _connect(self):
-        return sqlite3.connect(self.db_path)
-
-    def get_schema(self) -> Dict[str, Any]:
-        with self._connect() as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            
-            # Get tables
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-            tables = cur.fetchall()
-            
-            assembled: List[Dict[str, Any]] = []
-            for t_row in tables:
-                tname = t_row["name"]
-                
-                # columns and PK
-                cur.execute(f"PRAGMA table_info({qi(tname)})")
-                cols_rows = cur.fetchall()
-                cols = []
-                pks = []
-                for c in cols_rows:
-                    cols.append({"name": c["name"], "type": c["type"]})
-                    if c["pk"] > 0:
-                        pks.append(c["name"])
-                
-                # foreign keys
-                cur.execute(f"PRAGMA foreign_key_list({qi(tname)})")
-                fks_rows = cur.fetchall()
-                fks = []
-                # Group by id (constraint)
-                fk_map = {}
-                for f in fks_rows:
-                    fid = f["id"]
-                    if fid not in fk_map:
-                        fk_map[fid] = {
-                            "constraint": f"fk_{tname}_{fid}",
-                            "columns": [],
-                            "ref_schema": "main",
-                            "ref_table": f["table"],
-                            "ref_columns": []
-                        }
-                    fk_map[fid]["columns"].append(f["from"])
-                    fk_map[fid]["ref_columns"].append(f["to"])
-                fks = list(fk_map.values())
-                
-                # row count estimate (exact for SQLite usually)
-                cur.execute(f"SELECT count(*) as count FROM {qi(tname)}")
-                count = cur.fetchone()["count"]
-                
-                assembled.append({
-                    "schema": "main",
-                    "name": tname,
-                    "columns": cols,
-                    "primary_key": pks,
-                    "foreign_keys": fks,
-                    "row_estimate": count
-                })
-        return {"tables": assembled}
-
-    def get_stats(self, table: str) -> Dict[str, Any]:
-        # SQLite doesn't have pg_stats. We can do a quick sampling or just return empty for now.
-        # Or we can compute some basic stats if needed.
-        with self._connect() as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(f"PRAGMA table_info({qi(table)})")
-            cols = cur.fetchall()
-            
-            out = []
-            cur.execute(f"SELECT count(*) as total FROM {qi(table)}")
-            total = cur.fetchone()["total"]
-            
-            for c in cols:
-                col_name = c["name"]
-                if total > 0:
-                    cur.execute(f"SELECT count(*) as nulls FROM {qi(table)} WHERE {qi(col_name)} IS NULL")
-                    nulls = cur.fetchone()["nulls"]
-                    cur.execute(f"SELECT count(DISTINCT {qi(col_name)}) as distincts FROM {qi(table)}")
-                    distincts = cur.fetchone()["distincts"]
-                else:
-                    nulls = 0
-                    distincts = 0
-                
-                out.append({
-                    "column": col_name,
-                    "null_frac": nulls / total if total > 0 else 0,
-                    "n_distinct": distincts,
-                    "most_common_vals": "N/A in SQLite",
-                    "most_common_freqs": "N/A in SQLite"
-                })
-        return {"table": table, "stats": out}
-
-    def query_sql(self, sql: str, max_rows: int = 50) -> Dict[str, Any]:
-        ensure_readonly_sql(sql)
-        with self._connect() as conn:
-            cur = conn.cursor()
-            cur.execute(sql)
-            if cur.description is None:
-                return {"columns": [], "rows": []}
-            cols = [d[0] for d in cur.description]
-            rows = cur.fetchmany(max_rows)
         srows = [[None if v is None else str(v) for v in r] for r in rows]
         return {"columns": cols, "rows": srows, "truncated": len(rows) == max_rows}

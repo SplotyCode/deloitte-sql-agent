@@ -1,6 +1,6 @@
 import json
 from typing import Any, Dict, List, Optional
-from .client import OpenRouterClient
+from .client import OpenRouterClient, Message
 from .db_tools import PgTools, SqliteTools, BaseDbTools
 from .sql_gen import build_subset_sql
 
@@ -44,29 +44,46 @@ TOOLS_SPEC = [
     },
 ]
 
-SYSTEM_PROMPT = """You are a database subsetting planner.
-Goal: Produce a JSON plan that selects a smaller but diverse dataset for testing.
+SYSTEM_PROMPT = """You are a database subsetting expert.
+Goal: Produce a JSON plan that contains a sequence of SQL commands to select and insert a consistent subset of data into the target `subset` schema.
 
 You have tool access:
 - get_schema(): tables, columns, PKs, FKs, row estimates.
-- get_stats(table): cheap stats from database (null_frac, n_distinct, MCV).
-- query_sql(sql, max_rows): read-only queries only.
+- get_stats(table): cheap stats (null_frac, n_distinct, MCV).
+- query_sql(sql, max_rows): read-only queries.
 
-Hard rules:
-- Do NOT output any actual production data values (no IDs lists, no email addresses, etc.).
-- Your final answer must be STRICT JSON only (no markdown, no prose).
-- Anchor queries must be read-only and return ONLY the PK column of the anchor table.
-- Prefer diversity: choose rows across different enum-like columns, null/non-null, extreme/min/max timestamps/amounts if available, plus a random sample.
+Strategy:
+1. Explore the schema and data distribution.
+2. Decide on a valid subset strategy (e.g. "users provided", "recent orders", "random sample").
+3. Generate a sequence of `INSERT` statements to populate the target tables in `subset` schema.
+   - You can create temporary tables if needed (e.g. `CREATE TEMP TABLE _subset_ids ...`).
+   - You MUST respect foreign key dependencies (insert parents before children).
+   - Use `INSERT INTO subset.table SELECT ...` pattern.
+   - Use `ON CONFLICT DO NOTHING` to avoid duplicates if necessary.
 
 Plan JSON format:
 {
-  "iterations": 2,
-  "max_children_per_fk": 5,
-  "table_caps": { "orders": 5000, "users": 2000 },
-  "anchors": [
-     { "table": "users", "select_pk_sql": "SELECT id FROM users ORDER BY random() LIMIT 500" }
+  "steps": [
+    {
+      "comment": "Create temp table for selected users",
+      "sql": "CREATE TEMP TABLE _selected_users AS SELECT id FROM users ORDER BY random() LIMIT 100;"
+    },
+    {
+      "comment": "Insert users into target",
+      "sql": "INSERT INTO subset.users SELECT * FROM users WHERE id IN (SELECT id FROM _selected_users);"
+    },
+    {
+      "comment": "Insert orders for selected users",
+      "sql": "INSERT INTO subset.orders SELECT * FROM orders WHERE user_id IN (SELECT id FROM _selected_users);"
+    }
   ]
 }
+
+Hard rules:
+- Output STRICT JSON only.
+- Do NOT output markdown code blocks.
+- The `subset` schema is already created and target tables exist (empty).
+- You are responsible for the logic.
 """
 
 def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: int, out_path: str, verify_ssl: bool = True):
@@ -90,9 +107,9 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
         f"Start by calling get_schema() and then get_stats for a few high-value tables."
     )
 
-    messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT.replace("get_pg_stats", "get_stats")},
-        {"role": "user", "content": user_prompt},
+    messages: List[Message] = [
+        Message(role="system", content=SYSTEM_PROMPT),
+        Message(role="user", content=user_prompt),
     ]
 
     tool_impl = {
@@ -101,11 +118,10 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
         "query_sql": lambda sql, max_rows=50, **kwargs: tools.query_sql(sql, max_rows=max_rows),
     }
 
-    # tool-calling loop
-    final_msg: Optional[Dict[str, Any]] = None
+    final_msg: Optional[Message] = None
     for _step in range(20):
         resp = client.chat(messages, TOOLS_SPEC)
-        msg = resp["choices"][0]["message"]
+        msg: Message = resp["choices"][0]["message"]
         messages.append(msg)
 
         tool_calls = msg.get("tool_calls") or []
@@ -123,12 +139,12 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
                     result = {"error": f"{type(e).__name__}: {e}"}
 
                 messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "name": name,
-                        "content": json.dumps(result),
-                    }
+                    Message(
+                        role="tool",
+                        tool_call_id=tc["id"],
+                        name=name,
+                        content=json.dumps(result),
+                    )
                 )
             continue
 
@@ -149,6 +165,11 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
     plan = json.loads(plan_str)
 
     subset_sql = build_subset_sql(schema_obj=schema_obj, plan=plan, subset_schema="subset")
+    
+    # Prepend schema DDL
+    ddl = tools.get_ddl(tables=plan.get("tables"))
+    if ddl:
+        subset_sql = f"-- Schema DDL\n{ddl}\n\n{subset_sql}"
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(subset_sql)
