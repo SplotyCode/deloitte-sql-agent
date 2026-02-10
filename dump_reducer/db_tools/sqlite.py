@@ -6,16 +6,27 @@ from .base import BaseDbTools
 class SqliteTools(BaseDbTools):
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
+        self._persistent_conn = None
 
     def _connect(self):
+        if self._persistent_conn:
+            return self._persistent_conn
         return sqlite3.connect(self.db_path)
+
+    def set_persistent(self, val: bool):
+        if val:
+            if not self._persistent_conn:
+                self._persistent_conn = sqlite3.connect(self.db_path)
+        else:
+            if self._persistent_conn:
+                self._persistent_conn.close()
+                self._persistent_conn = None
 
     def get_schema(self) -> Dict[str, Any]:
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             
-            # Get tables
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
             tables = cur.fetchall()
             
@@ -23,7 +34,6 @@ class SqliteTools(BaseDbTools):
             for t_row in tables:
                 tname = t_row["name"]
                 
-                # columns and PK
                 cur.execute(f"PRAGMA table_info({qi(tname)})")
                 cols_rows = cur.fetchall()
                 cols = []
@@ -33,11 +43,9 @@ class SqliteTools(BaseDbTools):
                     if c["pk"] > 0:
                         pks.append(c["name"])
                 
-                # foreign keys
                 cur.execute(f"PRAGMA foreign_key_list({qi(tname)})")
                 fks_rows = cur.fetchall()
                 fks = []
-                # Group by id (constraint)
                 fk_map = {}
                 for f in fks_rows:
                     fid = f["id"]
@@ -53,7 +61,6 @@ class SqliteTools(BaseDbTools):
                     fk_map[fid]["ref_columns"].append(f["to"])
                 fks = list(fk_map.values())
                 
-                # row count estimate (exact for SQLite usually)
                 cur.execute(f"SELECT count(*) as count FROM {qi(tname)}")
                 count = cur.fetchone()["count"]
                 
@@ -68,8 +75,6 @@ class SqliteTools(BaseDbTools):
         return {"tables": assembled}
 
     def get_stats(self, table: str) -> Dict[str, Any]:
-        # SQLite doesn't have pg_stats. We can do a quick sampling or just return empty for now.
-        # Or we can compute some basic stats if needed.
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
@@ -102,34 +107,22 @@ class SqliteTools(BaseDbTools):
 
     def get_ddl(self, tables: List[str] = None) -> str:
         with self._connect() as conn:
-            # iterdump returns both schema and data (INSERTs). We only want schema.
             lines = []
             for line in conn.iterdump():
                 if line.startswith("INSERT INTO"):
                     continue
                 
-                # Check if this line creates a table we care about
                 if tables:
-                    # Very basic check: "CREATE TABLE " + table_name
-                    # or "CREATE TABLE " + "table_name"
-                    # This is brittle but works for standard SQLite dumps.
                     should_include = False
                     for t in tables:
                         if f"CREATE TABLE {qi(t)}" in line or f"CREATE TABLE {t}" in line:
                             should_include = True
                             break
-                        # Also include indexes/triggers related to these tables if possible?
-                        # checking strict string match might miss them.
-                        # For now, let's include anything that mentions the table name 
-                        # OR if it's not a CREATE TABLE statement (comments, etc - risky, might include too much)
-                        # Better approach: parse the statement? No, too complex.
-                        # Simple approach: Include line if it contains the table name.
                         if t in line:
                             should_include = True
                             break
                     
                     if not should_include:
-                         # Keep generic statements? e.g. "BEGIN TRANSACTION"
                          if "TRANSACTION" in line or "COMMIT" in line:
                              pass
                          else:
@@ -150,11 +143,87 @@ class SqliteTools(BaseDbTools):
         srows = [[None if v is None else str(v) for v in r] for r in rows]
         return {"columns": cols, "rows": srows, "truncated": len(rows) == max_rows}
 
-    def get_ddl(self) -> str:
+    def execute_sql(self, sql: str) -> None:
         with self._connect() as conn:
-            # iterdump returns both schema and data (INSERTs). We only want schema.
-            lines = []
-            for line in conn.iterdump():
-                if not line.startswith("INSERT INTO"):
-                    lines.append(line)
-            return "\n".join(lines)
+            conn.execute(sql)
+            conn.commit()
+
+    def setup_subset_schema(self, subset_schema: str, tables: List[str] = None) -> None:
+        
+        self.set_persistent(True)
+        
+        with self._connect() as conn:
+            conn.execute(f"ATTACH DATABASE ':memory:' AS {qi(subset_schema)}")
+            
+            schema_info = self.get_schema()
+            source_tables = {t["name"] for t in schema_info["tables"]}
+            
+            target_tables = tables if tables else list(source_tables)
+            for t in target_tables:
+                if t not in source_tables:
+                    continue
+                cur = conn.cursor()
+                cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (t,))
+                row = cur.fetchone()
+                if row:
+                    create_sql = row[0]
+                    if f"CREATE TABLE {qi(t)}" in create_sql:
+                        new_sql = create_sql.replace(f"CREATE TABLE {qi(t)}", f"CREATE TABLE {qi(subset_schema)}.{qi(t)}")
+                    elif f"CREATE TABLE {t}" in create_sql:
+                        new_sql = create_sql.replace(f"CREATE TABLE {t}", f"CREATE TABLE {qi(subset_schema)}.{qi(t)}")
+                    else:
+                        new_sql = create_sql.replace("CREATE TABLE", f"CREATE TABLE {qi(subset_schema)}.{qi(t)}", 1)
+                    
+                    conn.execute(new_sql)
+            conn.commit()
+
+    def dump_schema_data(self, schema: str, output_path: str, tables: List[str] = None) -> None:
+        """
+        Exports data as INSERT statements.
+        """
+        with self._connect() as conn:
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write("PRAGMA foreign_keys = OFF;\n")
+                f.write("BEGIN TRANSACTION;\n")
+                
+                cur = conn.cursor()
+                
+                if schema == 'main':
+                    table_query = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                    table_args = []
+                else:
+                    table_query = f"SELECT name FROM {qi(schema)}.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                    table_args = []
+                
+                cur.execute(table_query)
+                all_tables = [r[0] for r in cur.fetchall()]
+                
+                if tables:
+                    target_tables = [t for t in tables if t in all_tables]
+                else:
+                    target_tables = all_tables
+                
+                for tname in target_tables:
+                    qualified_table = f"{qi(schema)}.{qi(tname)}" if schema != 'main' else qi(tname)
+                    
+                    cur.execute(f"PRAGMA {f'{qi(schema)}.' if schema != 'main' else ''}table_info({qi(tname)})")
+                    cols = [r[1] for r in cur.fetchall()]
+                    col_list = ", ".join([qi(c) for c in cols])
+                    
+                    cur.execute(f"SELECT * FROM {qualified_table}")
+                    for row in cur:
+                        values = []
+                        for val in row:
+                            if val is None:
+                                values.append("NULL")
+                            elif isinstance(val, (int, float)):
+                                values.append(str(val))
+                            else:
+                                escaped = str(val).replace("'", "''")
+                                values.append(f"'{escaped}'")
+                        
+                        val_list = ", ".join(values)
+                        f.write(f"INSERT INTO {qualified_table} ({col_list}) VALUES ({val_list});\n")
+                    
+                f.write("COMMIT;\n")
+                f.write("PRAGMA foreign_keys = ON;\n")

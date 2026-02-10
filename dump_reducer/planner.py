@@ -87,23 +87,17 @@ Hard rules:
 """
 
 def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: int, out_path: str, verify_ssl: bool = True):
-    if db_url.startswith("postgres") or "://" in db_url:
+    if db_url.startswith("postgres"):
         tools: BaseDbTools = PgTools(db_url)
     else:
+        if db_url.startswith("sqlite://"):
+             db_url = db_url.replace("sqlite://", "")
         tools: BaseDbTools = SqliteTools(db_url)
         
     client = OpenRouterClient(api_key, model, verify=verify_ssl)
 
-    # A simple heuristic default caps; LLM can override
-    schema_obj = tools.get_schema()
-    schema_obj["engine"] = "postgres" if isinstance(tools, PgTools) else "sqlite"
-    
-    table_count = sum(1 for t in schema_obj["tables"] if len(t.get("primary_key", [])) == 1)
-    per_table_cap = max(50, target_rows // max(1, table_count))
-
     user_prompt = (
         f"Target total rows (rough): {target_rows}. "
-        f"Use table_caps to keep the dataset bounded (suggestion: ~{per_table_cap} per table on average). "
         f"Start by calling get_schema() and then get_stats for a few high-value tables."
     )
 
@@ -148,7 +142,6 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
                 )
             continue
 
-        # no tool calls -> should be final JSON
         final_msg = msg
         break
 
@@ -156,7 +149,6 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
         raise RuntimeError("Agent did not produce a final plan JSON.")
 
     plan_str = final_msg["content"].strip()
-    # Handle potential markdown code blocks in LLM output if they slip through
     if plan_str.startswith("```"):
         plan_str = plan_str.strip("`").strip()
         if plan_str.startswith("json"):
@@ -164,14 +156,23 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
 
     plan = json.loads(plan_str)
 
-    subset_sql = build_subset_sql(schema_obj=schema_obj, plan=plan, subset_schema="subset")
-    
-    # Prepend schema DDL
-    ddl = tools.get_ddl(tables=plan.get("tables"))
-    if ddl:
-        subset_sql = f"-- Schema DDL\n{ddl}\n\n{subset_sql}"
+    print("Setting up subset schema...")
+    tools.setup_subset_schema("subset", tables=plan.get("tables"))
+    print("Executing subset plan on database...")
+    steps = plan.get("steps", [])
+    for step in steps:
+        sql = step.get("sql", "").strip()
+        if not sql:
+            continue
+        print(f"Executing: {sql[:50]}...")
+        try:
+            tools.execute_sql(sql)
+        except Exception as e:
+            print(f"Error executing step: {e}")
+            raise e
 
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(subset_sql)
+    print(f"Dumping results to {out_path}...")
+    tools.dump_schema_data(schema="subset", output_path=out_path, tables=plan.get("tables"))
+        
+    print("Done.")
 
-    print(f"Wrote subset SQL to: {out_path}")

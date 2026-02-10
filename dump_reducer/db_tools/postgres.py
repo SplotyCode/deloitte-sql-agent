@@ -20,9 +20,7 @@ class PgTools(BaseDbTools):
         Uses pg_dump to get schema DDL.
         """
         import subprocess
-        # db_url can be passed as the connection string argument
         try:
-            # -s for schema-only, --no-owner to avoid permission issues on restore
             cmd = ["pg_dump", "-s", "--no-owner", "--no-privileges"]
             if tables:
                 for t in tables:
@@ -39,7 +37,6 @@ class PgTools(BaseDbTools):
         Returns tables, columns, PKs, FKs, plus row estimates.
         """
         with self._connect() as conn, conn.cursor() as cur:
-            # tables
             cur.execute(
                 """
                 SELECT table_schema, table_name
@@ -51,7 +48,6 @@ class PgTools(BaseDbTools):
             )
             tables = cur.fetchall()
 
-            # columns
             cur.execute(
                 """
                 SELECT table_schema, table_name, column_name, data_type
@@ -62,7 +58,6 @@ class PgTools(BaseDbTools):
             )
             cols_rows = cur.fetchall()
 
-            # primary keys (may be composite)
             cur.execute(
                 """
                 SELECT tc.table_schema, tc.table_name, kcu.column_name, kcu.ordinal_position
@@ -78,7 +73,6 @@ class PgTools(BaseDbTools):
             )
             pk_rows = cur.fetchall()
 
-            # foreign keys (may be composite)
             cur.execute(
                 """
                 SELECT
@@ -105,7 +99,6 @@ class PgTools(BaseDbTools):
             )
             fk_rows = cur.fetchall()
 
-            # row estimates
             cur.execute(
                 """
                 SELECT n.nspname AS table_schema, c.relname AS table_name, c.reltuples::bigint AS row_estimate
@@ -118,7 +111,6 @@ class PgTools(BaseDbTools):
             )
             est_rows = cur.fetchall()
 
-        # assemble
         col_map: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
         for sch, t, col, dtype in cols_rows:
             col_map.setdefault((sch, t), []).append((col, dtype))
@@ -128,7 +120,6 @@ class PgTools(BaseDbTools):
             pk_map.setdefault((sch, t), []).append(col)
 
         fk_map: Dict[Tuple[str, str], Dict[str, Dict[str, Any]]] = {}
-        # group by constraint (for composites)
         for sch, t, cname, col, _pos, fsch, ft, fcol in fk_rows:
             table_key = (sch, t)
             fk_map.setdefault(table_key, {})
@@ -174,7 +165,6 @@ class PgTools(BaseDbTools):
             rows = cur.fetchall()
         out = []
         for attname, null_frac, n_distinct, mcv, mcf in rows:
-            # keep payload smaller for LLM
             out.append(
                 {
                     "column": attname,
@@ -194,6 +184,66 @@ class PgTools(BaseDbTools):
                 return {"columns": [], "rows": []}
             cols = [d.name for d in cur.description]
             rows = cur.fetchmany(max_rows)
-        # stringify to avoid binary/decimal weirdness
         srows = [[None if v is None else str(v) for v in r] for r in rows]
         return {"columns": cols, "rows": srows, "truncated": len(rows) == max_rows}
+
+    def dump_schema_data(self, schema: str, output_path: str, tables: List[str] = None) -> None:
+        """
+        Uses pg_dump to export data as INSERT statements.
+        """
+        import subprocess
+        cmd = [
+            "pg_dump",
+            "--data-only",
+            "--inserts",
+            "--column-inserts",
+            "--no-owner",
+            "--no-privileges",
+            "-n", schema,
+            self.db_url
+        ]
+
+        if tables:
+            for t in tables:
+                if "." not in t:
+                    cmd.extend(["-t", f"{schema}.{t}"])
+                else:
+                    cmd.extend(["-t", t])
+
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                subprocess.run(cmd, stdout=f, check=True, text=True)
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"pg_dump failed: {e}")
+
+    def execute_sql(self, sql: str) -> None:
+        """
+        Executes SQL (allowing writes/DDL). Automatically commits.
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+            conn.commit()
+
+    def setup_subset_schema(self, subset_schema: str, tables: List[str] = None) -> None:
+        """
+        Creates the subset schema and copies table structures using LIKE ... INCLUDING ALL.
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"CREATE SCHEMA IF NOT EXISTS {subset_schema};")
+                
+                schema_info = self.get_schema()
+                source_tables_map = {t["name"]: t["schema"] for t in schema_info["tables"]}
+                
+                target_tables = tables if tables else list(source_tables_map.keys())
+                
+                for t in target_tables:
+                    if t not in source_tables_map:
+                        continue
+                    src_schema = source_tables_map[t]
+                    cur.execute(
+                        f"CREATE TABLE IF NOT EXISTS {subset_schema}.{t} "
+                        f"(LIKE {src_schema}.{t} INCLUDING ALL);"
+                    )
+            conn.commit()

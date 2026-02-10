@@ -12,7 +12,6 @@ def qi(ident: str) -> str:
 
 def ensure_readonly_sql(sql: str) -> None:
     if ";" in sql.strip().rstrip(";"):
-        # crude but effective: disallow multi-statement and embedded semicolons
         raise ValueError("Only a single SQL statement is allowed (no semicolons).")
     if not SQL_READONLY_PREFIX.search(sql):
         raise ValueError("Only SELECT/WITH/EXPLAIN statements are allowed.")

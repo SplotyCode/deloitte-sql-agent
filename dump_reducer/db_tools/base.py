@@ -6,9 +6,9 @@ from dataclasses import dataclass
 class TableInfo:
     schema: str
     name: str
-    columns: List[Tuple[str, str]]           # (col_name, data_type)
-    pk_cols: List[str]                       # support 1-col PK best
-    fks: List[Dict[str, Any]]                # {constraint, columns, ref_schema, ref_table, ref_columns}
+    columns: List[Tuple[str, str]]
+    pk_cols: List[str]
+    fks: List[Dict[str, Any]]
 
 class BaseDbTools(ABC):
     @abstractmethod
@@ -25,4 +25,25 @@ class BaseDbTools(ABC):
 
     @abstractmethod
     def query_sql(self, sql: str, max_rows: int = 50) -> Dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def dump_schema_data(self, schema: str, output_path: str, tables: List[str] = None) -> None:
+        """
+        Exports data from the specified schema to a SQL file using INSERT statements.
+        """
+        pass
+
+    @abstractmethod
+    def execute_sql(self, sql: str) -> None:
+        """
+        Executes a SQL statement (allowing writes).
+        """
+        pass
+
+    @abstractmethod
+    def setup_subset_schema(self, subset_schema: str, tables: List[str] = None) -> None:
+        """
+        Creates the subset schema and empty tables (copying structure from source).
+        """
         pass
