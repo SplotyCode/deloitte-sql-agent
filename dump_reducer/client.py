@@ -30,6 +30,12 @@ class OpenRouterClient:
             "tool_choice": "auto",
             "temperature": 0.2,
         }
-        resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=120, verify=self.verify)
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=120, verify=self.verify)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.SSLError as e:
+            raise RuntimeError(
+                f"SSL verification to OpenRouter API. "
+                f"Try running with --no-verify-ssl if you trust the network.\nOriginal error: {e}"
+            ) from e
