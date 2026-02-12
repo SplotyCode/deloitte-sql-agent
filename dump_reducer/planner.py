@@ -121,7 +121,7 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
         tool_calls = msg.get("tool_calls") or []
         if tool_calls:
             for tc in tool_calls:
-                name = tc["function"]["name"]
+                name = tc["function"]["name"].strip()
                 raw_args = tc["function"].get("arguments") or "{}"
                 try:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
