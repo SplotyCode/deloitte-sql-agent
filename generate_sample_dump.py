@@ -39,7 +39,7 @@ def generate_sample_dump(filename="sample_dump.sql", db_filename="sample_dump.db
     );
     """)
     users = []
-    for i in range(1, 101):
+    for i in range(1, 10001):
         username = f"user_{i}"
         email = f"user_{i}@example.com"
         bio = f"This is the bio for user {i}. It might contain some interesting or uninteresting info."
@@ -52,7 +52,7 @@ def generate_sample_dump(filename="sample_dump.sql", db_filename="sample_dump.db
         description = f"Description for product {i}. Features include X, Y, and Z."
         cursor.execute("INSERT INTO products (id, name, price, description) VALUES (?, ?, ?, ?)", (i, name, price, description))
         products.append(i)
-    for i in range(1, 501):
+    for i in range(1, 50001):
         user_id = random.choice(users)
         product_id = random.choice(products)
         quantity = random.randint(1, 5)
