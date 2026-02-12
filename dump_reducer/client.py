@@ -1,11 +1,13 @@
-import json
-import requests
 from typing import Any, Dict, List, TypedDict, Optional
+
+import requests
+
 
 class Message(TypedDict, total=False):
     role: str
     content: Optional[str]
     name: Optional[str]
+    reasoning: Optional[str]
     tool_calls: Optional[List[Dict[str, Any]]]
     tool_call_id: Optional[str]
 
