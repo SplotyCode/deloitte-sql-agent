@@ -13,6 +13,10 @@ def main():
     ap.add_argument("--no-verify-ssl", action="store_false", dest="verify_ssl", help="Disable SSL certificate verification for OpenRouter requests.")
     args = ap.parse_args()
 
+    if not args.verify_ssl:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
     if not args.api_key:
         print("Missing OpenRouter API key. Set OPENROUTER_API_KEY or pass --api-key.", file=sys.stderr)
         sys.exit(2)
