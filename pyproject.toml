@@ -6,6 +6,8 @@ requires-python = ">=3.14"
 dependencies = [
     "requests",
     "psycopg[binary]",
+    "rich",
+    "faker",
 ]
 
 [project.optional-dependencies]
