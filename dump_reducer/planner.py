@@ -1,8 +1,12 @@
 import json
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 from .client import OpenRouterClient, Message
 from .db_tools import PgTools, SqliteTools, BaseDbTools
-from .sql_gen import build_subset_sql
+from rich.console import Console
+from rich.panel import Panel
+from rich.syntax import Syntax
+
+console = Console()
 
 TOOLS_SPEC = [
     {
@@ -116,26 +120,33 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
     for _step in range(20):
         resp = client.chat(messages, TOOLS_SPEC)
         msg: Message = resp["choices"][0]["message"]
+
+        if msg.get("reasoning"):
+            console.print(Panel(msg["reasoning"], title=f"[bold blue]Thinking step {_step+1}[/bold blue]", border_style="blue"))
+
         messages.append(msg)
 
         tool_calls = msg.get("tool_calls") or []
         if tool_calls:
-            for tc in tool_calls:
-                name = tc["function"]["name"].strip()
-                raw_args = tc["function"].get("arguments") or "{}"
+            for call in tool_calls:
+                name = call["function"]["name"].strip()
+                raw_args = call["function"].get("arguments") or "{}"
                 try:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 except json.JSONDecodeError:
                     args = [raw_args]
                 try:
                     result = tool_impl[name](**args)
+                    console.print(f"[bold green]Tool {name}[/bold green] called with: [cyan]{raw_args}[/cyan]")
+                    console.print(f"Result: {result}")
                 except Exception as e:
                     result = {"error": f"{type(e).__name__}: {e}"}
+                    console.print(f"[bold red]Error calling tool {name}[/bold red] with {raw_args}: {e}")
 
                 messages.append(
                     Message(
                         role="tool",
-                        tool_call_id=tc["id"],
+                        tool_call_id=call["id"],
                         name=name,
                         content=json.dumps(result),
                     )
@@ -155,24 +166,26 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
             plan_str = plan_str[4:].strip()
 
     plan = json.loads(plan_str)
+    console.print(Panel(Syntax(json.dumps(plan, indent=2), "json", theme="monokai"), title="[bold green]Final Plan[/bold green]"))
 
-    print("Setting up subset schema...")
+    console.rule("[bold magenta]Execution[/bold magenta]")
+    console.print("[yellow]Setting up subset schema...[/yellow]")
     tools.setup_subset_schema("subset", tables=plan.get("tables"))
-    print("Executing subset plan on database...")
+    console.print("[yellow]Executing subset plan on database...[/yellow]")
     steps = plan.get("steps", [])
     for step in steps:
         sql = step.get("sql", "").strip()
         if not sql:
             continue
-        print(f"Executing: {sql[:50]}...")
+        console.print(f"Executing: [cyan]{sql}[/cyan]...")
         try:
             tools.execute_sql(sql)
         except Exception as e:
-            print(f"Error executing step: {e}")
+            console.print(f"[bold red]Error executing step:[/bold red] {e}")
             raise e
 
-    print(f"Dumping results to {out_path}...")
+    console.print(f"[bold green]Dumping results to {out_path}...[/bold green]")
     tools.dump_schema_data(schema="subset", output_path=out_path, tables=plan.get("tables"))
         
-    print("Done.")
+    console.print("[bold green]Done.[/bold green]")
 
