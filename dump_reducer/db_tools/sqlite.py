@@ -1,26 +1,17 @@
 import sqlite3
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from ..utils import ensure_readonly_sql, qi
 from .base import BaseDbTools
 
 class SqliteTools(BaseDbTools):
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
-        self._persistent_conn = None
+        self._conn: Optional[sqlite3.Connection] = None
 
     def _connect(self):
-        if self._persistent_conn:
-            return self._persistent_conn
-        return sqlite3.connect(self.db_path)
-
-    def set_persistent(self, val: bool):
-        if val:
-            if not self._persistent_conn:
-                self._persistent_conn = sqlite3.connect(self.db_path)
-        else:
-            if self._persistent_conn:
-                self._persistent_conn.close()
-                self._persistent_conn = None
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.db_path)
+        return self._conn
 
     def get_schema(self) -> Dict[str, Any]:
         with self._connect() as conn:
@@ -149,8 +140,6 @@ class SqliteTools(BaseDbTools):
             conn.commit()
 
     def setup_subset_schema(self, subset_schema: str, tables: List[str] = None) -> None:
-        
-        self.set_persistent(True)
         
         with self._connect() as conn:
             conn.execute(f"ATTACH DATABASE ':memory:' AS {qi(subset_schema)}")
