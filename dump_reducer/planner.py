@@ -126,7 +126,7 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
                 try:
                     args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 except json.JSONDecodeError:
-                    args = {}
+                    args = [raw_args]
                 try:
                     result = tool_impl[name](**args)
                 except Exception as e:
