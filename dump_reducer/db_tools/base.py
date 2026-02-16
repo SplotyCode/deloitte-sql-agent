@@ -17,6 +17,9 @@ class BaseDbTools(ABC):
 
     @abstractmethod
     def get_stats(self, table: str) -> Dict[str, Any]:
+        """
+        Response keys are unspecified and platform dependent. They are ment to be used by a llm
+        """
         pass
 
     @abstractmethod
