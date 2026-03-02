@@ -8,6 +8,10 @@ The repository now includes three working surfaces:
 2. `generate_sample_dump.py` for large, difficult SQLite fixtures
 3. `benchmark.py` for repeatable multi-scenario LLM benchmarks with persistent cache reuse
 
+Additional project context:
+
+- [LEARNINGS.md](/Users/david/PycharmProjects/deloitte-sql-agent/LEARNINGS.md) captures design and evaluation lessons from the recent commit history
+
 ## Core Flow
 
 The planner loop in `dump_reducer/planner.py` works like this:

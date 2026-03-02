@@ -1,5 +1,6 @@
 import json
 import hashlib
+import re
 from typing import Any, Dict, List, Optional
 from .client import OpenRouterClient, Message
 from .db_tools import PgTools, SqliteTools, BaseDbTools
@@ -100,6 +101,32 @@ def _plan_hash(plan: Dict[str, Any]) -> str:
     return hashlib.sha256(_normalize_plan(plan).encode("utf-8")).hexdigest()
 
 
+def _extract_plan_json(raw_content: str) -> Dict[str, Any]:
+    content = raw_content.strip()
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+
+    fenced_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL | re.IGNORECASE)
+    if fenced_match:
+        return json.loads(fenced_match.group(1))
+
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(content):
+        if char != "{":
+            continue
+        try:
+            parsed, _end = decoder.raw_decode(content[index:])
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+
+    raise json.JSONDecodeError("Could not extract JSON object from planner response.", content, 0)
+
+
 def run_agent_and_generate(
     db_url: str,
     api_key: str,
@@ -188,17 +215,11 @@ def run_agent_and_generate(
     if not final_msg or not final_msg.get("content"):
         raise RuntimeError("Agent did not produce a final plan JSON.")
 
-    plan_str = final_msg["content"].strip()
-    if plan_str.startswith("```"):
-        plan_str = plan_str.strip("`").strip()
-        if plan_str.startswith("json"):
-            plan_str = plan_str[4:].strip()
-
     try:
-        plan = json.loads(plan_str)
+        plan = _extract_plan_json(final_msg["content"])
         plan_hash = _plan_hash(plan)
     except Exception as e:
-        console.print(f"[bold red]Error extracting plan:[/bold red] {e} {plan_str}")
+        console.print(f"[bold red]Error extracting plan:[/bold red] {e} {final_msg['content']}")
         raise e
     console.print(Panel(Syntax(json.dumps(plan, indent=2), "json", theme="monokai"), title="[bold green]Final Plan[/bold green]"))
 
