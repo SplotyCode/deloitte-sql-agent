@@ -2,6 +2,8 @@ __pycache__
 
 .venv
 .idea
+.cache
+benchmark_artifacts
 
 sample_dump.db
 sample_dump.sql

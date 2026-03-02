@@ -1,5 +1,6 @@
 import json
-from typing import List, Optional
+import hashlib
+from typing import Any, Dict, List, Optional
 from .client import OpenRouterClient, Message
 from .db_tools import PgTools, SqliteTools, BaseDbTools
 from rich.console import Console
@@ -91,7 +92,24 @@ Hard rules:
 - You are responsible for the logic.
 """
 
-def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: int, out_path: str, verify_ssl: bool = True):
+def _normalize_plan(plan: Dict[str, Any]) -> str:
+    return json.dumps(plan, sort_keys=True, separators=(",", ":"))
+
+
+def _plan_hash(plan: Dict[str, Any]) -> str:
+    return hashlib.sha256(_normalize_plan(plan).encode("utf-8")).hexdigest()
+
+
+def run_agent_and_generate(
+    db_url: str,
+    api_key: str,
+    model: str,
+    target_rows: int,
+    out_path: str,
+    verify_ssl: bool = True,
+    prompt_note: Optional[str] = None,
+    cache_dir: Optional[str] = ".cache/openrouter",
+):
     if db_url.startswith("postgres"):
         tools: BaseDbTools = PgTools(db_url)
     else:
@@ -99,12 +117,14 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
              db_url = db_url.replace("sqlite://", "")
         tools: BaseDbTools = SqliteTools(db_url)
         
-    client = OpenRouterClient(api_key, model, verify=verify_ssl)
+    client = OpenRouterClient(api_key, model, verify=verify_ssl, cache_dir=cache_dir)
 
     user_prompt = (
         f"Target total rows (rough): {target_rows}. "
         f"Start by calling get_schema() and then get_stats for a few high-value tables."
     )
+    if prompt_note:
+        user_prompt += f" Additional benchmark / operator note: {prompt_note}"
 
     messages: List[Message] = [
         Message(role="system", content=SYSTEM_PROMPT),
@@ -118,8 +138,15 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
     }
 
     final_msg: Optional[Message] = None
+    cache_hits = 0
+    cache_misses = 0
     for _step in range(20):
         resp = client.chat(messages, TOOLS_SPEC)
+        cache_info = resp.get("_cache", {})
+        if cache_info.get("hit"):
+            cache_hits += 1
+        else:
+            cache_misses += 1
         msg: Message = resp["choices"][0]["message"]
 
         if msg.get("reasoning"):
@@ -167,6 +194,7 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
             plan_str = plan_str[4:].strip()
 
     plan = json.loads(plan_str)
+    plan_hash = _plan_hash(plan)
     console.print(Panel(Syntax(json.dumps(plan, indent=2), "json", theme="monokai"), title="[bold green]Final Plan[/bold green]"))
 
     console.rule("[bold magenta]Execution[/bold magenta]")
@@ -192,4 +220,14 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
     tools.dump_schema_data(schema="subset", output_path=out_path, tables=plan.get("tables"))
         
     console.print("[bold green]Done.[/bold green]")
-
+    return {
+        "plan": plan,
+        "plan_hash": plan_hash,
+        "steps": len(plan.get("steps", [])),
+        "tables": plan.get("tables", []),
+        "cache_hits": cache_hits,
+        "cache_misses": cache_misses,
+        "messages": len(messages),
+        "out_path": out_path,
+        "prompt_note": prompt_note,
+    }

@@ -10,6 +10,8 @@ def main():
     ap.add_argument("--out", default="subset.sql", help="Output SQL file to create/populate subset schema.")
     ap.add_argument("--model", default="moonshotai/kimi-k2-thinking", help="OpenRouter model id (must support tool calling).")
     ap.add_argument("--api-key", default=os.getenv("OPENROUTER_API_KEY", ""), help="OpenRouter API key (or env OPENROUTER_API_KEY).")
+    ap.add_argument("--prompt-note", default="", help="Optional extra guidance appended to the planner prompt.")
+    ap.add_argument("--cache-dir", default=".cache/openrouter", help="Directory for persistent OpenRouter response cache. Use empty string to disable.")
     ap.add_argument("--no-verify-ssl", action="store_false", dest="verify_ssl", help="Disable SSL certificate verification for OpenRouter requests.")
     args = ap.parse_args()
 
@@ -28,6 +30,8 @@ def main():
         target_rows=args.target_rows,
         out_path=args.out,
         verify_ssl=args.verify_ssl,
+        prompt_note=args.prompt_note or None,
+        cache_dir=args.cache_dir or None,
     )
 
 if __name__ == "__main__":
