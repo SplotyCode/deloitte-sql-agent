@@ -141,7 +141,7 @@ class OpenRouterClient:
             return response
 
         try:
-            resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=120, verify=self.verify)
+            resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60 * 4, verify=self.verify)
             resp.raise_for_status()
             response = resp.json()
             self._record_usage(response, cached=False)
