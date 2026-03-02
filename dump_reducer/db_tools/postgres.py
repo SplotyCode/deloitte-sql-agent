@@ -225,6 +225,46 @@ class PgTools(BaseDbTools):
                 cur.execute(sql)
             conn.commit()
 
+    def cleanup_dangling_references(self, subset_schema: str) -> None:
+        schema_info = self.get_schema()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                tables = schema_info["tables"]
+                for table in tables:
+                    tname = table["name"]
+                    fks = table["foreign_keys"]
+                    for fk in fks:
+                        ref_table = fk["ref_table"]
+                        local_cols = fk["columns"]
+                        ref_cols = fk["ref_columns"]
+                        q_table = f'"{subset_schema}"."{tname}"'
+                        q_ref = f'"{subset_schema}"."{ref_table}"'
+                        if len(local_cols) == 1:
+                            sql = f"""
+                                DELETE FROM {q_table}
+                                WHERE "{local_cols[0]}" IS NOT NULL
+                                AND "{local_cols[0]}" NOT IN (SELECT "{ref_cols[0]}" FROM {q_ref})
+                            """
+                            cur.execute(sql)
+                        else:
+                            join_parts = []
+                            for l, r in zip(local_cols, ref_cols):
+                                join_parts.append(f'{q_table}."{l}" = {q_ref}."{r}"')
+                            join_cond = " AND ".join(join_parts)
+                            
+                            not_null_cond = " AND ".join([f'{q_table}."{c}" IS NOT NULL' for c in local_cols])
+                            
+                            sql = f"""
+                                DELETE FROM {q_table}
+                                WHERE {not_null_cond}
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM {q_ref}
+                                    WHERE {join_cond}
+                                )
+                            """
+                            cur.execute(sql)
+            conn.commit()
+
     def setup_subset_schema(self, subset_schema: str, tables: List[str] = None) -> None:
         """
         Creates the subset schema and copies table structures using LIKE ... INCLUDING ALL.

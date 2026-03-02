@@ -45,6 +45,13 @@ class BaseDbTools(ABC):
         pass
 
     @abstractmethod
+    def cleanup_dangling_references(self, subset_schema: str) -> None:
+        """
+        Removes rows from the subset schema that have foreign key references to non-existent parent rows.
+        """
+        pass
+
+    @abstractmethod
     def setup_subset_schema(self, subset_schema: str, tables: List[str] = None) -> None:
         """
         Creates the subset schema and empty tables (copying structure from source).

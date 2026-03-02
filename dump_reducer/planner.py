@@ -13,7 +13,7 @@ TOOLS_SPEC = [
         "type": "function",
         "function": {
             "name": "get_schema",
-            "description": "Return database schema: tables, columns, primary keys, foreign keys, row estimates.",
+            "description": "Return database schema: tables, columns, primary keys, foreign keys, row counts.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -21,7 +21,7 @@ TOOLS_SPEC = [
         "type": "function",
         "function": {
             "name": "get_stats",
-            "description": "Return column stats for a table (cheap summary).",
+            "description": "Return column stats for a table.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -40,7 +40,7 @@ TOOLS_SPEC = [
                 "type": "object",
                 "properties": {
                     "sql": {"type": "string"},
-                    "max_rows": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "max_rows": {"type": "integer", "minimum": 1, "maximum": 500},
                 },
                 "required": ["sql"],
             },
@@ -50,6 +50,7 @@ TOOLS_SPEC = [
 
 SYSTEM_PROMPT = """You are a database subsetting expert.
 Goal: Produce a JSON plan that contains a sequence of SQL commands to select and insert a consistent subset of data into the target `subset` schema.
+User note: Make sure all products have at least one order!
 
 You have tool access:
 - get_schema(): tables, columns, PKs, FKs, row estimates.
@@ -183,6 +184,9 @@ def run_agent_and_generate(db_url: str, api_key: str, model: str, target_rows: i
         except Exception as e:
             console.print(f"[bold red]Error executing step:[/bold red] {e}")
             raise e
+
+    console.print("[yellow]Cleaning up dangling references...[/yellow]")
+    tools.cleanup_dangling_references("subset")
 
     console.print(f"[bold green]Dumping results to {out_path}...[/bold green]")
     tools.dump_schema_data(schema="subset", output_path=out_path, tables=plan.get("tables"))

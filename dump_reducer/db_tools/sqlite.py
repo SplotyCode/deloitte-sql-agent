@@ -36,7 +36,6 @@ class SqliteTools(BaseDbTools):
                 
                 cur.execute(f"PRAGMA foreign_key_list({qi(tname)})")
                 fks_rows = cur.fetchall()
-                fks = []
                 fk_map = {}
                 for f in fks_rows:
                     fid = f["id"]
@@ -72,29 +71,41 @@ class SqliteTools(BaseDbTools):
             cur.execute(f"PRAGMA table_info({qi(table)})")
             cols = cur.fetchall()
             
-            out = []
             cur.execute(f"SELECT count(*) as total FROM {qi(table)}")
             total = cur.fetchone()["total"]
             
-            for c in cols:
-                col_name = c["name"]
-                if total > 0:
+            if total == 0:
+                return {"table": table, "total_rows": 0, "stats": []}
+
+            out = []
+            for column in cols:
+                col_name = column["name"]
+
+                cur.execute(f"SELECT count(DISTINCT {qi(col_name)}) as distincts FROM {qi(table)}")
+                distincts = cur.fetchone()["distincts"]
+                
+                cur.execute(f"""
+                    SELECT {qi(col_name)} as val, count(*) as freq 
+                    FROM {qi(table)} 
+                    GROUP BY {qi(col_name)} 
+                    ORDER BY freq DESC 
+                    LIMIT 5
+                """)
+                common_rows = cur.fetchall()
+                top_values = [[row["val"], row["freq"]] for row in common_rows]
+                
+                stat = {
+                    "column": col_name,
+                    "n_distinct": distincts,
+                    "top_values": top_values
+                }
+                if column["notnull"] == 0:
                     cur.execute(f"SELECT count(*) as nulls FROM {qi(table)} WHERE {qi(col_name)} IS NULL")
                     nulls = cur.fetchone()["nulls"]
-                    cur.execute(f"SELECT count(DISTINCT {qi(col_name)}) as distincts FROM {qi(table)}")
-                    distincts = cur.fetchone()["distincts"]
-                else:
-                    nulls = 0
-                    distincts = 0
-                
-                out.append({
-                    "column": col_name,
-                    "null_frac": nulls / total if total > 0 else 0,
-                    "n_distinct": distincts,
-                    "most_common_vals": "N/A in SQLite",
-                    "most_common_freqs": "N/A in SQLite"
-                })
-        return {"table": table, "stats": out}
+                    stat["null_frac"] = nulls / total
+
+                out.append(stat)
+        return {"table": table, "total_rows": total, "stats": out}
 
     def get_ddl(self, tables: List[str] = None) -> str:
         with self._connect() as conn:
@@ -166,6 +177,61 @@ class SqliteTools(BaseDbTools):
                     conn.execute(new_sql)
             conn.commit()
 
+    def cleanup_dangling_references(self, subset_schema: str) -> None:
+        """
+        Removes rows from the subset schema that have foreign key references to non-existent parent rows.
+        """
+        with self._connect() as conn:
+            schema_info = self.get_schema()
+            conn.execute("PRAGMA foreign_keys = OFF")
+            
+            tables = schema_info["tables"]
+            for table in tables:
+                tname = table["name"]
+                fks = table["foreign_keys"]
+                
+                for fk in fks:
+                    local_cols = fk["columns"]
+                    ref_table = fk["ref_table"]
+                    ref_cols = fk["ref_columns"]
+                    
+                    qualified_table = f"{qi(subset_schema)}.{qi(tname)}"
+                    qualified_ref = f"{qi(subset_schema)}.{qi(ref_table)}"
+                    
+                    if len(local_cols) == 1:
+                        local_col = local_cols[0]
+                        ref_col = ref_cols[0]
+                        
+                        sql = f"""
+                            DELETE FROM {qualified_table}
+                            WHERE {qi(local_col)} IS NOT NULL
+                            AND {qi(local_col)} NOT IN (SELECT {qi(ref_col)} FROM {qualified_ref})
+                        """
+                        conn.execute(sql)
+                    else:
+                        join_cond = " AND ".join([
+                            f"{qualified_table}.{qi(l)} = {qualified_ref}.{qi(r)}"
+                            for l, r in zip(local_cols, ref_cols)
+                        ])
+                        
+                        null_check = " AND ".join([
+                            f"{qualified_table}.{qi(l)} IS NOT NULL"
+                            for l in local_cols
+                        ])
+                        
+                        sql = f"""
+                            DELETE FROM {qualified_table}
+                            WHERE {null_check}
+                            AND NOT EXISTS (
+                                SELECT 1 FROM {qualified_ref}
+                                WHERE {join_cond}
+                            )
+                        """
+                        conn.execute(sql)
+            
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys = ON")
+
     def dump_schema_data(self, schema: str, output_path: str, tables: List[str] = None) -> None:
         """
         Exports data as INSERT statements.
@@ -179,10 +245,8 @@ class SqliteTools(BaseDbTools):
                 
                 if schema == 'main':
                     table_query = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                    table_args = []
                 else:
                     table_query = f"SELECT name FROM {qi(schema)}.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                    table_args = []
                 
                 cur.execute(table_query)
                 all_tables = [r[0] for r in cur.fetchall()]
