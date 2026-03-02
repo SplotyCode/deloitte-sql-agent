@@ -141,7 +141,7 @@ def run_agent_and_generate(
     final_msg: Optional[Message] = None
     cache_hits = 0
     cache_misses = 0
-    for _step in range(20):
+    for _step in range(80):
         resp = client.chat(messages, TOOLS_SPEC)
         cache_info = resp.get("_cache", {})
         if cache_info.get("hit"):
@@ -194,8 +194,12 @@ def run_agent_and_generate(
         if plan_str.startswith("json"):
             plan_str = plan_str[4:].strip()
 
-    plan = json.loads(plan_str)
-    plan_hash = _plan_hash(plan)
+    try:
+        plan = json.loads(plan_str)
+        plan_hash = _plan_hash(plan)
+    except Exception as e:
+        console.print(f"[bold red]Error extracting plan:[/bold red] {e} {plan_str}")
+        raise e
     console.print(Panel(Syntax(json.dumps(plan, indent=2), "json", theme="monokai"), title="[bold green]Final Plan[/bold green]"))
 
     console.rule("[bold magenta]Execution[/bold magenta]")
