@@ -109,6 +109,7 @@ def run_agent_and_generate(
     verify_ssl: bool = True,
     prompt_note: Optional[str] = None,
     cache_dir: Optional[str] = ".cache/openrouter",
+    print_openrouter_stats: bool = True,
 ):
     if db_url.startswith("postgres"):
         tools: BaseDbTools = PgTools(db_url)
@@ -218,7 +219,16 @@ def run_agent_and_generate(
 
     console.print(f"[bold green]Dumping results to {out_path}...[/bold green]")
     tools.dump_schema_data(schema="subset", output_path=out_path, tables=plan.get("tables"))
-        
+    
+    llm_stats_raw = client.get_stats()
+    llm_stats = llm_stats_raw if isinstance(llm_stats_raw, dict) else {}
+    if print_openrouter_stats:
+        console.print(
+            Panel(
+                Syntax(json.dumps(llm_stats, indent=2, sort_keys=True), "json", theme="monokai"),
+                title="[bold cyan]OpenRouter Stats[/bold cyan]",
+            )
+        )
     console.print("[bold green]Done.[/bold green]")
     return {
         "plan": plan,
@@ -230,4 +240,5 @@ def run_agent_and_generate(
         "messages": len(messages),
         "out_path": out_path,
         "prompt_note": prompt_note,
+        "llm_stats": llm_stats,
     }

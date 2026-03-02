@@ -66,6 +66,20 @@ VARIANTS: List[BenchmarkVariant] = [
 ]
 
 
+def _combine_llm_stats(lhs: Dict[str, float], rhs: Dict[str, float]) -> Dict[str, float]:
+    merged = dict(lhs)
+    for key, value in rhs.items():
+        if isinstance(value, (int, float)):
+            merged[key] = merged.get(key, 0) + value
+        else:
+            merged[key] = value
+
+    calls_total = int(merged.get("calls_total", 0))
+    cache_hits = int(merged.get("cache_hits", 0))
+    merged["cache_hit_rate"] = (cache_hits / calls_total) if calls_total else 0.0
+    return merged
+
+
 def _ensure_fixture(base_dir: Path, scenario: BenchmarkScenario, rebuild: bool) -> Path:
     fixture_dir = base_dir / "fixtures"
     fixture_dir.mkdir(parents=True, exist_ok=True)
@@ -83,6 +97,18 @@ def _render_markdown(results: Dict[str, object]) -> str:
         f"- Model: `{results['model']}`",
         f"- Runs per scenario: `{results['runs_per_scenario']}`",
         f"- Cache directory: `{results['cache_dir']}`",
+        "",
+        "## OpenRouter Totals",
+        "",
+        f"- Calls: `{results['llm_stats']['calls_total']}`",
+        f"- Network requests: `{results['llm_stats']['network_requests']}`",
+        f"- Cache hits: `{results['llm_stats']['cache_hits']}`",
+        f"- Cache misses: `{results['llm_stats']['cache_misses']}`",
+        f"- Billed tokens: `{results['llm_stats']['billed_total_tokens']}`",
+        f"- Cached tokens replayed: `{results['llm_stats']['cached_total_tokens']}`",
+        f"- Logical tokens: `{results['llm_stats']['logical_total_tokens']}`",
+        f"- Billed cost (USD): `{results['llm_stats']['billed_cost_usd']:.6f}`",
+        f"- Cache hit rate: `{results['llm_stats']['cache_hit_rate']:.2%}`",
         "",
         "## Scenario Summary",
         "",
@@ -145,6 +171,7 @@ def run_benchmark(
         "model": model,
         "runs_per_scenario": runs_per_scenario,
         "cache_dir": cache_dir,
+        "llm_stats": {},
         "scenarios": [],
     }
 
@@ -158,6 +185,7 @@ def run_benchmark(
         cache_hits = 0
         cache_misses = 0
         durations: List[float] = []
+        scenario_llm_stats: Dict[str, float] = {}
 
         for run_index, variant in enumerate(VARIANTS[:runs_per_scenario], start=1):
             out_path = scenario_dir / f"{run_index:02d}_{variant.name}.sql"
@@ -176,12 +204,14 @@ def run_benchmark(
                 verify_ssl=verify_ssl,
                 prompt_note=prompt_note,
                 cache_dir=cache_dir,
+                print_openrouter_stats=False,
             )
             duration = time.perf_counter() - started
             durations.append(duration)
             plan_hashes.add(result["plan_hash"])
             cache_hits += result["cache_hits"]
             cache_misses += result["cache_misses"]
+            scenario_llm_stats = _combine_llm_stats(scenario_llm_stats, result["llm_stats"])
 
             run_results.append(
                 {
@@ -194,6 +224,7 @@ def run_benchmark(
                     "plan_hash": result["plan_hash"],
                     "steps": result["steps"],
                     "out_path": str(out_path),
+                    "llm_stats": result["llm_stats"],
                 }
             )
 
@@ -210,9 +241,11 @@ def run_benchmark(
             "cache_hits": cache_hits,
             "cache_misses": cache_misses,
             "avg_duration_seconds": sum(durations) / len(durations),
+            "llm_stats": scenario_llm_stats,
             "status": "PASS" if unique_plan_count == len(run_results) else "FAIL",
         }
         summary["scenarios"].append(scenario_result)
+        summary["llm_stats"] = _combine_llm_stats(summary["llm_stats"], scenario_llm_stats)
 
     raw_path = run_dir / "benchmark_results.json"
     raw_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")

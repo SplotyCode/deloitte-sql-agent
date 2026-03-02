@@ -25,6 +25,25 @@ def test_benchmark_runner_writes_report_and_passes_unique_hashes(tmp_path):
             "messages": 2,
             "out_path": kwargs["out_path"],
             "prompt_note": kwargs["prompt_note"],
+            "llm_stats": {
+                "calls_total": 1,
+                "network_requests": 1,
+                "cache_hits": 0,
+                "cache_misses": 1,
+                "billed_prompt_tokens": 10,
+                "billed_completion_tokens": 5,
+                "billed_total_tokens": 15,
+                "cached_prompt_tokens": 0,
+                "cached_completion_tokens": 0,
+                "cached_total_tokens": 0,
+                "billed_cost_usd": 0.01,
+                "cached_cost_usd": 0.0,
+                "cache_hit_rate": 0.0,
+                "logical_prompt_tokens": 10,
+                "logical_completion_tokens": 5,
+                "logical_total_tokens": 15,
+                "logical_cost_usd": 0.01,
+            },
         }
 
     with patch("benchmark.generate_sample_dump", side_effect=_fake_generate_sample_dump), patch(
@@ -54,6 +73,25 @@ def test_benchmark_runner_fails_when_unique_plan_count_drops(tmp_path):
             "messages": 2,
             "out_path": kwargs["out_path"],
             "prompt_note": kwargs["prompt_note"],
+            "llm_stats": {
+                "calls_total": 1,
+                "network_requests": 1,
+                "cache_hits": 0,
+                "cache_misses": 1,
+                "billed_prompt_tokens": 10,
+                "billed_completion_tokens": 5,
+                "billed_total_tokens": 15,
+                "cached_prompt_tokens": 0,
+                "cached_completion_tokens": 0,
+                "cached_total_tokens": 0,
+                "billed_cost_usd": 0.01,
+                "cached_cost_usd": 0.0,
+                "cache_hit_rate": 0.0,
+                "logical_prompt_tokens": 10,
+                "logical_completion_tokens": 5,
+                "logical_total_tokens": 15,
+                "logical_cost_usd": 0.01,
+            },
         }
 
     with patch("benchmark.generate_sample_dump", side_effect=_fake_generate_sample_dump), patch(

@@ -25,9 +25,14 @@ def test_openrouter_client_reuses_disk_cache(tmp_path):
 
         first = client.chat(messages, tools)
         second = client.chat(messages, tools)
+        stats = client.get_stats()
 
     assert mocked_post.call_count == 1
     assert first["_cache"]["hit"] is False
     assert second["_cache"]["hit"] is True
     assert first["choices"][0]["message"]["content"] == second["choices"][0]["message"]["content"]
     assert len(list(tmp_path.glob("*.json"))) == 1
+    assert stats["calls_total"] == 2
+    assert stats["network_requests"] == 1
+    assert stats["cache_hits"] == 1
+    assert stats["cache_misses"] == 1
