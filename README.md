@@ -106,6 +106,11 @@ Important arguments:
   - `--incidents-per-tenant`
 - `--skip-sql-dump`: generate only the SQLite database
 
+Scale notes:
+
+- `tiny` is a low-entity profile for quick local checks; it is not intended for realistic volume benchmarks.
+- use explicit per-entity overrides (`--tenants`, `--users-per-tenant`, `--orders-per-tenant`, etc.) when you need guaranteed high source-row counts.
+
 ### Hidden Reference Carriers
 
 The generator deliberately creates relationships that are not declared as foreign keys. These are intended to challenge the subset agent.
@@ -150,22 +155,23 @@ This matters for benchmarking because the benchmark reuses fixed prompt variants
 
 ## Benchmark Runner
 
-`benchmark.py` automates repeated benchmark execution over four predefined scenarios.
+`benchmark.py` automates repeated benchmark execution across predefined scenarios.
 
 Default benchmark shape:
 
-- 4 scenarios
+- 4 scenarios (defaults to all 4)
 - 10 runs per scenario
 - 10 predefined prompt variants per scenario
 - persistent cache reuse across reruns
 - uniqueness check on final normalized plan hashes
+- run-level failures are captured and reported without stopping the full benchmark
 
-The four default scenarios are:
+Current scenarios include:
 
-1. `enterprise_baseline`
-2. `commerce_hidden`
-3. `support_hidden`
-4. `stress_aggressive`
+1. `synthetic_8_tables` (>100k rows)
+2. `synthetic_20_tables` (>100k rows)
+3. `wide_90_tables_mixed` (>100k rows, mixed hidden references)
+4. `wide_96_tables_aggressive` (>100k rows, aggressive hidden references)
 
 Each scenario uses a dedicated generated SQLite fixture and a fixed target row budget.
 
@@ -181,6 +187,8 @@ uv run python benchmark.py \
 Important arguments:
 
 - `--runs-per-scenario`: defaults to `10`; must not exceed the predefined variant count
+- `--max-scenarios`: run the first N scenarios (1-4)
+- `--fail-on-issues`: optional strict mode; exits non-zero when any scenario has errors or duplicate plans
 - `--output-dir`: where fixtures, outputs, JSON summaries, and Markdown reports are written
 - `--cache-dir`: persistent cache location
 - `--rebuild-fixtures`: regenerate fixture databases
@@ -195,7 +203,9 @@ Instead:
 1. Each scenario has ten fixed prompt variants.
 2. Each variant injects a specific planning bias such as revenue focus, support focus, inventory focus, or hidden-reference focus.
 3. The final plan JSON is normalized and hashed.
-4. The benchmark fails if a scenario does not produce ten unique final plan hashes.
+4. Any run failure is recorded in the report and benchmark execution continues.
+5. A scenario is marked with issues when runs error out or duplicate plans appear.
+6. If strict CI behavior is needed, use `--fail-on-issues`.
 
 This gives both:
 
