@@ -13,6 +13,61 @@ class SqliteTools(BaseDbTools):
             self._conn = sqlite3.connect(self.db_path)
         return self._conn
 
+    @staticmethod
+    def _strip_identifier_quotes(value: str) -> str:
+        candidate = value.strip()
+        if len(candidate) >= 2:
+            if (candidate[0] == '"' and candidate[-1] == '"') or (candidate[0] == "'" and candidate[-1] == "'"):
+                return candidate[1:-1]
+            if (candidate[0] == "[" and candidate[-1] == "]") or (candidate[0] == "`" and candidate[-1] == "`"):
+                return candidate[1:-1]
+        return candidate
+
+    def _resolve_table_name(self, table: str, conn: sqlite3.Connection) -> str:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        table_names = {row[0] for row in cur.fetchall()}
+
+        raw = table.strip()
+        if raw in table_names:
+            return raw
+
+        parts = [self._strip_identifier_quotes(p) for p in raw.split(".") if p.strip()]
+        if not parts:
+            raise ValueError("Table name must not be empty.")
+
+        candidate = parts[-1]
+        if candidate in table_names:
+            return candidate
+
+        # Handle explicit main.<table> patterns and tolerate quoted schema.
+        if len(parts) >= 2 and parts[-2].lower() == "main" and parts[-1] in table_names:
+            return parts[-1]
+
+        raise ValueError(f"Table '{table}' does not exist in sqlite_master.")
+
+    @staticmethod
+    def _fk_to_compact(local_cols: List[str], ref_table: str, ref_cols: List[str]) -> str:
+        return f"{','.join(local_cols)}->{ref_table}({','.join(ref_cols)})"
+
+    @staticmethod
+    def _parse_fk_compact(spec: str) -> tuple[list[str], str, list[str]]:
+        lhs, rhs = spec.split("->", 1)
+        ref_table, ref_cols_raw = rhs.split("(", 1)
+        ref_cols = ref_cols_raw.rstrip(")")
+        local_cols = [c.strip() for c in lhs.split(",") if c.strip()]
+        target_table = ref_table.strip().split(".")[-1]
+        target_cols = [c.strip() for c in ref_cols.split(",") if c.strip()]
+        return local_cols, target_table, target_cols
+
+    def _fk_components(self, fk: Any) -> tuple[list[str], str, list[str]]:
+        if isinstance(fk, str):
+            return self._parse_fk_compact(fk)
+        local_cols = fk["columns"]
+        ref_table = fk["ref_table"]
+        ref_cols = fk["ref_columns"]
+        return local_cols, ref_table, ref_cols
+
     def get_schema(self) -> Dict[str, Any]:
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
@@ -40,16 +95,13 @@ class SqliteTools(BaseDbTools):
                 for f in fks_rows:
                     fid = f["id"]
                     if fid not in fk_map:
-                        fk_map[fid] = {
-                            "constraint": f"fk_{tname}_{fid}",
-                            "columns": [],
-                            "ref_schema": "main",
-                            "ref_table": f["table"],
-                            "ref_columns": []
-                        }
+                        fk_map[fid] = {"columns": [], "ref_table": f["table"], "ref_columns": []}
                     fk_map[fid]["columns"].append(f["from"])
                     fk_map[fid]["ref_columns"].append(f["to"])
-                fks = list(fk_map.values())
+                fks = [
+                    self._fk_to_compact(v["columns"], v["ref_table"], v["ref_columns"])
+                    for v in fk_map.values()
+                ]
                 
                 cur.execute(f"SELECT count(*) as count FROM {qi(tname)}")
                 count = cur.fetchone()["count"]
@@ -68,25 +120,26 @@ class SqliteTools(BaseDbTools):
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
-            cur.execute(f"PRAGMA table_info({qi(table)})")
+            resolved_table = self._resolve_table_name(table, conn)
+            cur.execute(f"PRAGMA table_info({qi(resolved_table)})")
             cols = cur.fetchall()
             
-            cur.execute(f"SELECT count(*) as total FROM {qi(table)}")
+            cur.execute(f"SELECT count(*) as total FROM {qi(resolved_table)}")
             total = cur.fetchone()["total"]
             
             if total == 0:
-                return {"table": table, "total_rows": 0, "stats": []}
+                return {"table": resolved_table, "total_rows": 0, "stats": []}
 
             out = []
             for column in cols:
                 col_name = column["name"]
 
-                cur.execute(f"SELECT count(DISTINCT {qi(col_name)}) as distincts FROM {qi(table)}")
+                cur.execute(f"SELECT count(DISTINCT {qi(col_name)}) as distincts FROM {qi(resolved_table)}")
                 distincts = cur.fetchone()["distincts"]
                 
                 cur.execute(f"""
                     SELECT {qi(col_name)} as val, count(*) as freq 
-                    FROM {qi(table)} 
+                    FROM {qi(resolved_table)} 
                     GROUP BY {qi(col_name)} 
                     ORDER BY freq DESC 
                     LIMIT 5
@@ -100,12 +153,12 @@ class SqliteTools(BaseDbTools):
                     "top_values": top_values
                 }
                 if column["notnull"] == 0:
-                    cur.execute(f"SELECT count(*) as nulls FROM {qi(table)} WHERE {qi(col_name)} IS NULL")
+                    cur.execute(f"SELECT count(*) as nulls FROM {qi(resolved_table)} WHERE {qi(col_name)} IS NULL")
                     nulls = cur.fetchone()["nulls"]
                     stat["null_frac"] = nulls / total
 
                 out.append(stat)
-        return {"table": table, "total_rows": total, "stats": out}
+        return {"table": resolved_table, "total_rows": total, "stats": out}
 
     def get_ddl(self, tables: List[str] = None) -> str:
         with self._connect() as conn:
@@ -191,9 +244,7 @@ class SqliteTools(BaseDbTools):
                 fks = table["foreign_keys"]
                 
                 for fk in fks:
-                    local_cols = fk["columns"]
-                    ref_table = fk["ref_table"]
-                    ref_cols = fk["ref_columns"]
+                    local_cols, ref_table, ref_cols = self._fk_components(fk)
                     
                     qualified_table = f"{qi(subset_schema)}.{qi(tname)}"
                     qualified_ref = f"{qi(subset_schema)}.{qi(ref_table)}"

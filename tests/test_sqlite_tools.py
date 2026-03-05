@@ -46,13 +46,7 @@ def test_sqlite_get_schema(temp_db):
                 ],
                 "primary_key": ["id"],
                 "foreign_keys": [
-                    {
-                        "constraint": "fk_posts_0",
-                        "columns": ["user_id"],
-                        "ref_schema": "main",
-                        "ref_table": "users",
-                        "ref_columns": ["id"]
-                    }
+                    "user_id->users(id)"
                 ],
                 "row_estimate": 1
             }
@@ -84,6 +78,14 @@ def test_sqlite_get_stats(temp_db):
     assert all(v[1] == 1 for v in email_stats["top_values"])
     assert email_stats["null_frac"] == 0.0
 
+
+def test_sqlite_get_stats_with_qualified_table_name(temp_db):
+    tools = SqliteTools(temp_db)
+    stats = tools.get_stats('main."users"')
+
+    assert stats["table"] == "users"
+    assert stats["total_rows"] == 2
+
 def test_sqlite_get_stats_empty(tmp_path):
     db_path = tmp_path / "test_empty.db"
     conn = sqlite3.connect(db_path)
@@ -113,4 +115,3 @@ def test_sqlite_query_sql_forbidden(temp_db):
     tools = SqliteTools(temp_db)
     with pytest.raises(ValueError, match="Only SELECT"):
         tools.query_sql("DELETE FROM users")
-

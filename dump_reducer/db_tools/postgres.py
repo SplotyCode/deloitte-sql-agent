@@ -15,6 +15,26 @@ class PgTools(BaseDbTools):
             raise ImportError("psycopg is not installed. Run 'pip install psycopg[binary]' to use PostgreSQL.")
         return psycopg.connect(self.db_url)
 
+    @staticmethod
+    def _fk_to_compact(local_cols: List[str], ref_schema: str, ref_table: str, ref_cols: List[str]) -> str:
+        target = f"{ref_schema}.{ref_table}" if ref_schema else ref_table
+        return f"{','.join(local_cols)}->{target}({','.join(ref_cols)})"
+
+    @staticmethod
+    def _parse_fk_compact(spec: str) -> tuple[list[str], str, list[str]]:
+        lhs, rhs = spec.split("->", 1)
+        ref_target, ref_cols_raw = rhs.split("(", 1)
+        ref_cols = ref_cols_raw.rstrip(")")
+        local_cols = [c.strip() for c in lhs.split(",") if c.strip()]
+        ref_table = ref_target.strip().split(".")[-1]
+        target_cols = [c.strip() for c in ref_cols.split(",") if c.strip()]
+        return local_cols, ref_table, target_cols
+
+    def _fk_components(self, fk: Any) -> tuple[list[str], str, list[str]]:
+        if isinstance(fk, str):
+            return self._parse_fk_compact(fk)
+        return fk["columns"], fk["ref_table"], fk["ref_columns"]
+
     def get_ddl(self, tables: List[str] = None) -> str:
         """
         Uses pg_dump to get schema DDL.
@@ -125,7 +145,7 @@ class PgTools(BaseDbTools):
             fk_map.setdefault(table_key, {})
             fk = fk_map[table_key].setdefault(
                 cname,
-                {"constraint": cname, "columns": [], "ref_schema": fsch, "ref_table": ft, "ref_columns": []},
+                {"columns": [], "ref_schema": fsch, "ref_table": ft, "ref_columns": []},
             )
             fk["columns"].append(col)
             fk["ref_columns"].append(fcol)
@@ -140,7 +160,10 @@ class PgTools(BaseDbTools):
                     "name": t,
                     "columns": [{"name": c, "type": dt} for c, dt in col_map.get((sch, t), [])],
                     "primary_key": pk_map.get((sch, t), []),
-                    "foreign_keys": list(fk_map.get((sch, t), {}).values()),
+                    "foreign_keys": [
+                        self._fk_to_compact(fk["columns"], fk["ref_schema"], fk["ref_table"], fk["ref_columns"])
+                        for fk in fk_map.get((sch, t), {}).values()
+                    ],
                     "row_estimate": est_map.get((sch, t), 0),
                 }
             )
@@ -234,9 +257,7 @@ class PgTools(BaseDbTools):
                     tname = table["name"]
                     fks = table["foreign_keys"]
                     for fk in fks:
-                        ref_table = fk["ref_table"]
-                        local_cols = fk["columns"]
-                        ref_cols = fk["ref_columns"]
+                        local_cols, ref_table, ref_cols = self._fk_components(fk)
                         q_table = f'"{subset_schema}"."{tname}"'
                         q_ref = f'"{subset_schema}"."{ref_table}"'
                         if len(local_cols) == 1:
