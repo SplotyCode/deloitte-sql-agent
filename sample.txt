@@ -1,0 +1,10 @@
+uv run python generate_sample_dump.py \
+  --scenario commerce \
+  --scale large \
+  --tenants 30 \
+  --users-per-tenant 100 \
+  --products-per-tenant 200 \
+  --orders-per-tenant 300 \
+  --tickets-per-tenant 80 \
+  --projects-per-tenant 20 \
+  --incidents-per-tenant 15 \
