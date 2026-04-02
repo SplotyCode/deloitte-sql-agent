@@ -5,6 +5,7 @@
 \usepackage[utf8]{inputenc}
 \usepackage{lmodern}
 \usepackage{xcolor}
+\usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{listings}
 \usepackage{enumitem}
@@ -25,6 +26,8 @@
     pdftitle={Deloitte SQL Agent Installation Guide},
     pdfauthor={OpenAI Codex}
 }
+
+\graphicspath{{./img/}{img/}{./docs/img/}{docs/img/}}
 
 \lstset{
     basicstyle=\ttfamily\small,
@@ -75,6 +78,14 @@
     \end{figure}
 }
 
+\newcommand{\screenshot}[3][0.92\linewidth]{%
+    \begin{figure}[ht]
+    \centering
+    \includegraphics[width=#1]{#2}
+    \caption{#3}
+    \end{figure}
+}
+
 \newcommand{\guidecover}{%
     \begin{titlepanel}
     {\color{DeloitteGreen}\rule{\linewidth}{1.5pt}}\\[1.2em]
@@ -113,17 +124,17 @@ Before you begin:
 This guide does not explain how to provision the VM itself. Use the Deloitte VM onboarding tutorial:
 
 \begin{quote}
-\texttt{https://deloitteemea.service-now.com/mysupport?id=sc_cat_item&sys_id=4e02d262c3a7c2145608282ce00131bf&table=sc_cat_item&searchTerm=VMware%20Workstation%20Player}
+\href{https://deloitteemea.service-now.com/mysupport?id=sc_cat_item&sys_id=4e02d262c3a7c2145608282ce00131bf&table=sc_cat_item&searchTerm=VMware%20Workstation%20Player}{Deloitte VM onboarding tutorial}
 \end{quote}
 
 \section{Step 1: Install uv}
 
-uv is the Python package manager used by this project. Install it from the official Astral installer.\footnote{\url{https://docs.astral.sh/uv/getting-started/installation/}}
+uv is the Python package manager used by this project. On Deloitte machines, prefer the official WinGet package.\footnote{\url{https://docs.astral.sh/uv/getting-started/installation/}}
 
 Open \textbf{PowerShell} and run:
 
 \begin{lstlisting}
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+winget install --id=astral-sh.uv -e
 \end{lstlisting}
 
 Close PowerShell and open it again, then verify the installation:
@@ -132,13 +143,13 @@ Close PowerShell and open it again, then verify the installation:
 uv --version
 \end{lstlisting}
 
-If the installer script is blocked in your environment, use the official WinGet package instead:
+If WinGet is unavailable, you can use the official Astral PowerShell installer as an alternative. At the time this guide was written, this installer was often blocked in the Deloitte setup even on Telekom WLAN, so it should not be the primary path:
 
 \begin{lstlisting}
-winget install --id=astral-sh.uv -e
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 \end{lstlisting}
 
-\screenshotplaceholder{Add a screenshot of the uv installation command and successful \texttt{uv --version} output.}
+\screenshot{install_uv.png}{uv installation via WinGet and the verification step in PowerShell.}
 
 \section{Step 2: Install Python 3.14 with uv}
 
@@ -164,7 +175,7 @@ uv --native-tls python list
 
 Reference: official uv Python installation guide.\footnote{\url{https://docs.astral.sh/uv/guides/install-python/}}
 
-\screenshotplaceholder{Add a screenshot of the Python installation step.}
+\screenshot{install_python.png}{Python 3.14 installation with \texttt{uv --native-tls python install 3.14}.}
 
 \section{Step 3: Download and Extract the ZIP from SharePoint}
 
@@ -192,7 +203,7 @@ uv --native-tls sync
 
 This creates the local virtual environment and installs the project dependencies from the lockfile.
 
-\screenshotplaceholder{Add a screenshot of the \texttt{uv --native-tls sync} command running successfully.}
+\screenshot[0.72\linewidth]{uv_sync.png}{Successful dependency installation with \texttt{uv --native-tls sync}.}
 
 \section{Step 5: Create an OpenRouter Token}
 
@@ -206,7 +217,17 @@ Open the OpenRouter sign-in page:
 \url{https://openrouter.ai/sign-in}
 \end{quote}
 
-\subsection*{5.2 Open the keys page}
+\subsection*{5.2 Set up payment if required}
+
+Depending on your OpenRouter account or workspace, you may need to add payment information before you can create and use an API key.
+
+\begin{enumerate}[leftmargin=1.5em]
+    \item Open your OpenRouter account or workspace settings.
+    \item Add payment details if required by your setup.
+    \item Return to the API key area after payment is configured.
+\end{enumerate}
+
+\subsection*{5.3 Open the keys page}
 
 After signing in, open the keys page:
 
@@ -216,14 +237,19 @@ After signing in, open the keys page:
 
 At the time this document was written on April 2, 2026, this URL redirects to the workspace key-management page after login.
 
-\subsection*{5.3 Create and copy the token}
+\subsection*{5.4 Create and copy the token}
 
 \begin{enumerate}[leftmargin=1.5em]
     \item Click the button to create a new API key.
     \item Give the key a clear name, for example \texttt{Deloitte SQL Agent}.
-    \item If your OpenRouter workspace requires budget or billing configuration, complete that step.
     \item Copy the new key immediately.
 \end{enumerate}
+
+\begin{infobox}
+\textbf{OpenRouter user interface note}
+
+The OpenRouter website may change over time. If buttons or menu labels look slightly different, the overall process should still be similar: sign in, set up payment if needed, then create an API key.
+\end{infobox}
 
 OpenRouter references:
 
@@ -234,8 +260,7 @@ OpenRouter references:
 
 \textbf{Important:} Treat the token like a password. Do not send it by email or save it in screenshots.
 
-\screenshotplaceholder{Add a screenshot of the OpenRouter sign-in page.}
-\screenshotplaceholder{Add a screenshot of the OpenRouter API keys page and the create-key dialog.}
+\screenshot{open_router.png}{OpenRouter during payment and token setup.}
 
 \section{Step 6: Run the SQL Agent}
 
@@ -272,7 +297,7 @@ Notes:
 If you do not want to pass the key on the command line every time, you can set \texttt{OPENROUTER\_API\_KEY} in PowerShell and omit \texttt{--api-key} from the run command.
 \end{infobox}
 
-\screenshotplaceholder{Add a screenshot of a successful first run of the SQL Agent.}
+\screenshot{agent_running.png}{Successful first run of the SQL Agent in PowerShell.}
 
 \section{Troubleshooting}
 
@@ -311,7 +336,7 @@ uv --version
 \section{Quick Reference}
 
 \begin{lstlisting}
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+winget install --id=astral-sh.uv -e
 uv --native-tls python install 3.14
 cd C:\Users\<your-user>\Projects\deloitte-sql-agent
 uv --native-tls sync
