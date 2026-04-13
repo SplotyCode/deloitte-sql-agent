@@ -7,3 +7,5 @@ benchmark_artifacts
 
 sample_dump.db
 sample_dump.sql
+sample.json
+dump.zip
