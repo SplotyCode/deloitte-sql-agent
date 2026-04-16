@@ -181,8 +181,9 @@ Reference: official uv Python installation guide.\footnote{\url{https://docs.ast
 \section{Step 3: Download and Extract the ZIP from SharePoint}
 
 \begin{enumerate}[leftmargin=1.5em]
-    \item Open the SharePoint link provided by the Deloitte team.
-    \item Download the ZIP file, for example \texttt{deloitte-sql-agent.zip}.
+    \item Open SharePoint.
+    \item Navigate to \textbf{Qualit\"atsmanagement} $\rightarrow$ \textbf{Testdatenmanagement} $\rightarrow$ \textbf{dump subset}.
+    \item Download the ZIP file \texttt{agent.zip}.
     \item Right-click the ZIP file and choose \textbf{Extract All}.
     \item Extract it to a simple working folder, for example:
 \end{enumerate}
@@ -191,7 +192,7 @@ Reference: official uv Python installation guide.\footnote{\url{https://docs.ast
 \texttt{C:\textbackslash Users\textbackslash <your-user>\textbackslash Projects\textbackslash deloitte-sql-agent}
 \end{quote}
 
-\screenshotplaceholder{Add a screenshot of the SharePoint download page and extracted folder.}
+\screenshot{download.png}{SharePoint download page for the Deloitte SQL Agent ZIP package.}
 
 \section{Step 4: Install the Project Dependencies}
 
@@ -263,13 +264,32 @@ OpenRouter references:
 
 \screenshot{open_router.png}{OpenRouter during payment and token setup.}
 
+\section{Optional Step: Create a Sample SQLite Database for a Test Run}
+
+If you want to validate the installation before using a real source database, you can generate a local SQLite sample database inside the project folder.
+
+Run:
+
+\begin{lstlisting}
+uv --native-tls run python generate_sample_dump.py `
+  --db-filename sample_dump.db `
+  --scenario support `
+  --scale tiny `
+  --hidden-reference-mode light `
+  --skip-sql-dump
+\end{lstlisting}
+
+This creates a file named \texttt{sample\_dump.db} in the current directory. The \texttt{tiny} scale is intended for a quick setup check and keeps the test run fast.
+
+For additional fixture-generator options and larger scenarios, see \texttt{docs/usage.md} in the project ZIP.
+
 \section{Step 6: Run the SQL Agent}
 
-Run the agent from the project folder. The example below uses a SQLite database file.
+Run the agent from the project folder. The example below uses the sample SQLite database created in the optional step above. If you already have a real database, replace the value of \texttt{--db-url}.
 
 \begin{lstlisting}
 uv --native-tls run python main.py `
-  --db-url sqlite:///C:/path/to/source.db `
+  --db-url sqlite:///C:/Users/<your-user>/Projects/deloitte-sql-agent/sample_dump.db `
   --target-rows 1000 `
   --out subset.sql `
   --model moonshotai/kimi-k2-thinking `
@@ -290,6 +310,7 @@ Notes:
     \item \texttt{--no-verify-ssl} is passed to the SQL Agent itself.
     \item The tutorial uses \texttt{--api-key} directly on the command line.
     \item The output file \texttt{subset.sql} will be written into the current directory unless you provide a different path.
+    \item For the full planner command reference and additional arguments, see \texttt{docs/usage.md} in the project ZIP.
 \end{itemize}
 
 \begin{infobox}
@@ -341,8 +362,14 @@ winget install --id=astral-sh.uv -e
 uv --native-tls python install 3.14
 cd C:\Users\<your-user>\Projects\deloitte-sql-agent
 uv --native-tls sync
+uv --native-tls run python generate_sample_dump.py `
+  --db-filename sample_dump.db `
+  --scenario support `
+  --scale tiny `
+  --hidden-reference-mode light `
+  --skip-sql-dump
 uv --native-tls run python main.py `
-  --db-url sqlite:///C:/path/to/source.db `
+  --db-url sqlite:///C:/Users/<your-user>/Projects/deloitte-sql-agent/sample_dump.db `
   --target-rows 1000 `
   --out subset.sql `
   --model moonshotai/kimi-k2-thinking `
