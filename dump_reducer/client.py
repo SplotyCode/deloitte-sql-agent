@@ -36,11 +36,19 @@ class OpenRouterStats:
 
 
 class OpenRouterClient:
-    def __init__(self, api_key: str, model: str, verify: bool = True, cache_dir: Optional[str] = ".cache/openrouter") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        verify: bool = True,
+        cache_dir: Optional[str] = ".cache/openrouter",
+        request_timeout_seconds: int = 60 * 15,
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.verify = verify
         self.cache_dir = Path(cache_dir) if cache_dir else None
+        self.request_timeout_seconds = request_timeout_seconds
         self._stats = OpenRouterStats()
 
     def _build_payload(self, messages: List[Message], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -141,7 +149,13 @@ class OpenRouterClient:
             return response
 
         try:
-            resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60 * 4, verify=self.verify)
+            resp = requests.post(
+                OPENROUTER_URL,
+                headers=headers,
+                json=payload,
+                timeout=self.request_timeout_seconds,
+                verify=self.verify,
+            )
             resp.raise_for_status()
             response = resp.json()
             self._record_usage(response, cached=False)

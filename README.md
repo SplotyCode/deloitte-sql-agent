@@ -17,6 +17,7 @@ Additional project context:
 - [Usage](./docs/usage.md): running the planner, generating fixtures, and development commands
 - [How It Works](./docs/how-it-works.md): planner loop, tool calls, execution flow, and cache behavior
 - [Benchmarks](./docs/benchmarks.md): benchmark scenarios, uniqueness checks, outputs, and reporting
+- [Current State And Next Features](./docs/current-state-and-next-features.md): short roadmap note covering extension points and likely next steps
 
 ## Quick Start
 

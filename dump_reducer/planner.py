@@ -9,6 +9,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 
 console = Console()
+MAX_EXECUTION_REPAIR_ATTEMPTS = 2
 
 TOOLS_SPEC = [
     {
@@ -135,45 +136,18 @@ def _extract_plan_json(raw_content: str) -> Dict[str, Any]:
 
     raise json.JSONDecodeError("Could not extract JSON object from planner response.", content, 0)
 
-def run_agent_and_generate(
-    db_url: str,
-    api_key: str,
-    model: str,
-    target_rows: int,
-    out_path: str,
-    verify_ssl: bool = True,
-    prompt_note: Optional[str] = None,
-    cache_dir: Optional[str] = ".cache/openrouter",
-    print_openrouter_stats: bool = True,
-):
-    tools = create_db_tools(db_url)
-    dialect = tools.dialect_name()
 
-    client = OpenRouterClient(api_key, model, verify=verify_ssl, cache_dir=cache_dir)
-
-    user_prompt = (
-        f"SQL dialect: {dialect}. "
-        f"Target total rows (rough): {target_rows}. "
-        f"Start by calling get_schema() and then get_stats for a few high-value tables."
-    )
-    if prompt_note:
-        user_prompt += f" Additional benchmark / operator note: {prompt_note}"
-
-    messages: List[Message] = [
-        Message(role="system", content=_build_system_prompt(tools)),
-        Message(role="user", content=user_prompt),
-    ]
-
-    tool_impl = {
-        "get_schema": lambda **kwargs: tools.get_schema(),
-        "get_stats": lambda table, **kwargs: tools.get_stats(table),
-        "query_sql": lambda sql, max_rows=50, **kwargs: tools.query_sql(sql, max_rows=max_rows),
-    }
-
+def _collect_final_message(
+    messages: List[Message],
+    client: OpenRouterClient,
+    tool_impl: Dict[str, Any],
+    max_steps: int = 80,
+) -> tuple[Message, int, int]:
     final_msg: Optional[Message] = None
     cache_hits = 0
     cache_misses = 0
-    for _step in range(80):
+
+    for step_index in range(max_steps):
         resp = client.chat(messages, TOOLS_SPEC)
         cache_info = resp.get("_cache", {})
         if cache_info.get("hit"):
@@ -183,7 +157,13 @@ def run_agent_and_generate(
         msg: Message = resp["choices"][0]["message"]
 
         if msg.get("reasoning"):
-            console.print(Panel(msg["reasoning"], title=f"[bold blue]Thinking step {_step+1}[/bold blue]", border_style="blue"))
+            console.print(
+                Panel(
+                    msg["reasoning"],
+                    title=f"[bold blue]Thinking step {step_index + 1}[/bold blue]",
+                    border_style="blue",
+                )
+            )
 
         messages.append(msg)
 
@@ -220,36 +200,130 @@ def run_agent_and_generate(
     if not final_msg or not final_msg.get("content"):
         raise RuntimeError("Agent did not produce a final plan JSON.")
 
+    return final_msg, cache_hits, cache_misses
+
+
+def _extract_final_plan(final_msg: Message) -> Dict[str, Any]:
     try:
-        plan = _extract_plan_json(final_msg["content"])
-        plan_hash = _plan_hash(plan)
+        return _extract_plan_json(final_msg["content"] or "")
     except Exception as e:
-        console.print(f"[bold red]Error extracting plan:[/bold red] {e} {final_msg['content']}")
+        console.print(f"[bold red]Error extracting plan:[/bold red] {e} {final_msg.get('content')}")
         raise e
-    console.print(Panel(Syntax(json.dumps(plan, indent=2), "json", theme="monokai"), title="[bold green]Final Plan[/bold green]"))
+
+
+def _render_execution_failure_feedback(plan: Dict[str, Any], exc: Exception) -> str:
+    details = str(exc).strip()
+    return (
+        "Your previous plan failed during execution and must be fully corrected. "
+        "Return a complete replacement JSON plan, not a patch.\n\n"
+        f"Execution failure:\n{details}\n\n"
+        "Fix the root cause in the SQL plan. "
+        "If the error is about duplicate keys, make the inserts idempotent or narrow the joins. "
+        "If the error is about missing columns or tables, correct the SQL to match the actual schema. "
+        "If the failure happened inside a multi-statement step, rewrite the full step safely.\n\n"
+        f"Previous plan hash: {_plan_hash(plan)}"
+    )
+
+
+def _execute_plan(db_url: str, plan: Dict[str, Any], out_path: str) -> None:
+    exec_tools = create_db_tools(db_url)
 
     console.rule("[bold magenta]Execution[/bold magenta]")
     console.print("[yellow]Setting up subset schema...[/yellow]")
-    tools.setup_subset_schema("subset", tables=plan.get("tables"))
+    exec_tools.setup_subset_schema("subset", tables=plan.get("tables"))
     console.print("[yellow]Executing subset plan on database...[/yellow]")
+
     steps = plan.get("steps", [])
-    for step in steps:
+    for step_index, step in enumerate(steps, start=1):
         sql = step.get("sql", "").strip()
         if not sql:
             continue
+        comment = step.get("comment", "").strip()
         console.print(f"Executing: [cyan]{sql}[/cyan]...")
         try:
-            tools.execute_sql(sql)
+            exec_tools.execute_sql(sql)
         except Exception as e:
             console.print(f"[bold red]Error executing step:[/bold red] {e}")
-            raise e
+            step_label = f"step {step_index}"
+            if comment:
+                step_label += f" ({comment})"
+            raise RuntimeError(f"{step_label} failed: {e}\nSQL:\n{sql}") from e
 
     console.print("[yellow]Cleaning up dangling references...[/yellow]")
-    tools.cleanup_dangling_references("subset")
+    try:
+        exec_tools.cleanup_dangling_references("subset")
+    except Exception as e:
+        raise RuntimeError(f"cleanup_dangling_references failed: {e}") from e
 
     console.print(f"[bold green]Dumping results to {out_path}...[/bold green]")
-    tools.dump_schema_data(schema="subset", output_path=out_path, tables=plan.get("tables"))
-    
+    try:
+        exec_tools.dump_schema_data(schema="subset", output_path=out_path, tables=plan.get("tables"))
+    except Exception as e:
+        raise RuntimeError(f"dump_schema_data failed: {e}") from e
+
+def run_agent_and_generate(
+    db_url: str,
+    api_key: str,
+    model: str,
+    target_rows: int,
+    out_path: str,
+    verify_ssl: bool = True,
+    prompt_note: Optional[str] = None,
+    cache_dir: Optional[str] = ".cache/openrouter",
+    print_openrouter_stats: bool = True,
+):
+    tools = create_db_tools(db_url)
+    dialect = tools.dialect_name()
+
+    client = OpenRouterClient(api_key, model, verify=verify_ssl, cache_dir=cache_dir)
+
+    user_prompt = (
+        f"SQL dialect: {dialect}. "
+        f"Target total rows (rough): {target_rows}. "
+        f"Start by calling get_schema() and then get_stats for a few high-value tables."
+    )
+    if prompt_note:
+        user_prompt += f" Additional benchmark / operator note: {prompt_note}"
+
+    messages: List[Message] = [
+        Message(role="system", content=_build_system_prompt(tools)),
+        Message(role="user", content=user_prompt),
+    ]
+
+    tool_impl = {
+        "get_schema": lambda **kwargs: tools.get_schema(),
+        "get_stats": lambda table, **kwargs: tools.get_stats(table),
+        "query_sql": lambda sql, max_rows=50, **kwargs: tools.query_sql(sql, max_rows=max_rows),
+    }
+
+    cache_hits = 0
+    cache_misses = 0
+    plan: Dict[str, Any] | None = None
+
+    for attempt_index in range(MAX_EXECUTION_REPAIR_ATTEMPTS + 1):
+        final_msg, hits, misses = _collect_final_message(messages, client, tool_impl)
+        cache_hits += hits
+        cache_misses += misses
+
+        plan = _extract_final_plan(final_msg)
+        console.print(
+            Panel(Syntax(json.dumps(plan, indent=2), "json", theme="monokai"), title="[bold green]Final Plan[/bold green]")
+        )
+
+        try:
+            _execute_plan(db_url, plan, out_path)
+            break
+        except Exception as e:
+            if attempt_index >= MAX_EXECUTION_REPAIR_ATTEMPTS:
+                raise
+            console.print(f"[bold red]Plan execution failed; requesting repaired plan:[/bold red] {e}")
+            messages.append(Message(role="user", content=_render_execution_failure_feedback(plan, e)))
+    else:
+        raise RuntimeError("Agent did not produce an executable plan.")
+
+    assert plan is not None
+    plan_hash = _plan_hash(plan)
+
     llm_stats_raw = client.get_stats()
     llm_stats = llm_stats_raw if isinstance(llm_stats_raw, dict) else {}
     if print_openrouter_stats:
