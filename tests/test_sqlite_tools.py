@@ -115,3 +115,24 @@ def test_sqlite_query_sql_forbidden(temp_db):
     tools = SqliteTools(temp_db)
     with pytest.raises(ValueError, match="Only SELECT"):
         tools.query_sql("DELETE FROM users")
+
+
+def test_sqlite_execute_sql_supports_multi_statement_script(temp_db):
+    tools = SqliteTools(temp_db)
+    tools.setup_subset_schema("subset", tables=["users"])
+
+    tools.execute_sql(
+        """
+        CREATE TEMP TABLE _selected_users AS
+        SELECT id FROM users WHERE name = 'Alice';
+        INSERT INTO subset.users
+        SELECT * FROM users WHERE id IN (SELECT id FROM _selected_users);
+        """
+    )
+
+    conn = tools._connect()
+    count = conn.execute("SELECT COUNT(*) FROM subset.users").fetchone()[0]
+    names = [row[0] for row in conn.execute("SELECT name FROM subset.users ORDER BY id").fetchall()]
+
+    assert count == 1
+    assert names == ["Alice"]

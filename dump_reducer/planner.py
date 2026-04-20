@@ -3,7 +3,7 @@ import hashlib
 import re
 from typing import Any, Dict, List, Optional
 from .client import OpenRouterClient, Message
-from .db_tools import PgTools, SqliteTools, BaseDbTools
+from .db_tools import BaseDbTools, create_db_tools, detect_sql_dialect, get_dialect_spec_for_name
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -93,6 +93,15 @@ Hard rules:
 - You are responsible for the logic.
 """
 
+def _build_system_prompt(tools_or_dialect: BaseDbTools | str) -> str:
+    if isinstance(tools_or_dialect, BaseDbTools):
+        return tools_or_dialect.build_system_prompt(SYSTEM_PROMPT)
+    return SYSTEM_PROMPT + get_dialect_spec_for_name(tools_or_dialect).to_prompt()
+
+
+def _detect_sql_dialect(db_url: str) -> str:
+    return detect_sql_dialect(db_url)
+
 def _normalize_plan(plan: Dict[str, Any]) -> str:
     return json.dumps(plan, sort_keys=True, separators=(",", ":"))
 
@@ -126,7 +135,6 @@ def _extract_plan_json(raw_content: str) -> Dict[str, Any]:
 
     raise json.JSONDecodeError("Could not extract JSON object from planner response.", content, 0)
 
-
 def run_agent_and_generate(
     db_url: str,
     api_key: str,
@@ -138,16 +146,13 @@ def run_agent_and_generate(
     cache_dir: Optional[str] = ".cache/openrouter",
     print_openrouter_stats: bool = True,
 ):
-    if db_url.startswith("postgres"):
-        tools: BaseDbTools = PgTools(db_url)
-    else:
-        if db_url.startswith("sqlite://"):
-             db_url = db_url.replace("sqlite://", "")
-        tools: BaseDbTools = SqliteTools(db_url)
-        
+    tools = create_db_tools(db_url)
+    dialect = tools.dialect_name()
+
     client = OpenRouterClient(api_key, model, verify=verify_ssl, cache_dir=cache_dir)
 
     user_prompt = (
+        f"SQL dialect: {dialect}. "
         f"Target total rows (rough): {target_rows}. "
         f"Start by calling get_schema() and then get_stats for a few high-value tables."
     )
@@ -155,7 +160,7 @@ def run_agent_and_generate(
         user_prompt += f" Additional benchmark / operator note: {prompt_note}"
 
     messages: List[Message] = [
-        Message(role="system", content=SYSTEM_PROMPT),
+        Message(role="system", content=_build_system_prompt(tools)),
         Message(role="user", content=user_prompt),
     ]
 

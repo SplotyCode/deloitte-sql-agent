@@ -1,12 +1,31 @@
 import sqlite3
 from typing import Any, Dict, List, Optional
 from ..utils import ensure_readonly_sql, qi
-from .base import BaseDbTools
+from .base import BaseDbTools, DialectSpec
 
 class SqliteTools(BaseDbTools):
+    dialect = DialectSpec(
+        name="sqlite",
+        display_name="SQLite",
+        subset_target_description="The target tables live under the attached `subset` database, so write to `subset.table_name`.",
+        dedupe_hint="SQLite conflict handling such as `INSERT OR IGNORE`",
+        extra_guidance=(
+            "Do not use PostgreSQL-only syntax such as schemas like `public`, `ON CONFLICT DO NOTHING`, `DISTINCT ON`, `SERIAL`, or `RETURNING` unless SQLite supports the exact form.",
+        ),
+    )
+
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         self._conn: Optional[sqlite3.Connection] = None
+
+    @classmethod
+    def supports_url(cls, db_url: str) -> bool:
+        return db_url.startswith("sqlite://") or "://" not in db_url
+
+    @classmethod
+    def from_db_url(cls, db_url: str) -> "SqliteTools":
+        normalized = db_url.replace("sqlite://", "", 1) if db_url.startswith("sqlite://") else db_url
+        return cls(normalized)
 
     def _connect(self):
         if self._conn is None:
@@ -45,28 +64,6 @@ class SqliteTools(BaseDbTools):
             return parts[-1]
 
         raise ValueError(f"Table '{table}' does not exist in sqlite_master.")
-
-    @staticmethod
-    def _fk_to_compact(local_cols: List[str], ref_table: str, ref_cols: List[str]) -> str:
-        return f"{','.join(local_cols)}->{ref_table}({','.join(ref_cols)})"
-
-    @staticmethod
-    def _parse_fk_compact(spec: str) -> tuple[list[str], str, list[str]]:
-        lhs, rhs = spec.split("->", 1)
-        ref_table, ref_cols_raw = rhs.split("(", 1)
-        ref_cols = ref_cols_raw.rstrip(")")
-        local_cols = [c.strip() for c in lhs.split(",") if c.strip()]
-        target_table = ref_table.strip().split(".")[-1]
-        target_cols = [c.strip() for c in ref_cols.split(",") if c.strip()]
-        return local_cols, target_table, target_cols
-
-    def _fk_components(self, fk: Any) -> tuple[list[str], str, list[str]]:
-        if isinstance(fk, str):
-            return self._parse_fk_compact(fk)
-        local_cols = fk["columns"]
-        ref_table = fk["ref_table"]
-        ref_cols = fk["ref_columns"]
-        return local_cols, ref_table, ref_cols
 
     def get_schema(self) -> Dict[str, Any]:
         with self._connect() as conn:
@@ -199,9 +196,10 @@ class SqliteTools(BaseDbTools):
         return {"columns": cols, "rows": srows, "truncated": len(rows) == max_rows}
 
     def execute_sql(self, sql: str) -> None:
+        if not sql.strip():
+            return
         with self._connect() as conn:
-            conn.execute(sql)
-            conn.commit()
+            conn.executescript(sql)
 
     def setup_subset_schema(self, subset_schema: str, tables: List[str] = None) -> None:
         
